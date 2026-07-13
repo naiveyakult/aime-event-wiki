@@ -23,5 +23,10 @@ def test_repository_markdown_documents_are_written_in_chinese() -> None:
 
 
 def test_default_model_matches_project_configuration() -> None:
-    assert Settings(_env_file=None).openai_model == "deepseek-v4-pro"
-    assert "OPENAI_MODEL=deepseek-v4-pro" in (ROOT / ".env.example").read_text()
+    settings = Settings(_env_file=None)
+    example = (ROOT / ".env.example").read_text()
+
+    assert settings.openai_model == "deepseek-v4-pro"
+    assert settings.openai_base_url == "https://api.deepseek.com"
+    assert "OPENAI_MODEL=deepseek-v4-pro" in example
+    assert "OPENAI_BASE_URL=https://api.deepseek.com" in example
