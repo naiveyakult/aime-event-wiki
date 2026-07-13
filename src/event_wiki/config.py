@@ -14,6 +14,8 @@ class Settings(BaseSettings):
     openai_base_url: str = "https://api.deepseek.com"
     openai_api_key: str = ""
     openai_model: str = "deepseek-v4-pro"
+    llm_timeout_seconds: float = Field(default=120, ge=10, le=600)
+    llm_max_retries: int = Field(default=5, ge=0, le=10)
     review_token: str = ""
     data_root: Path = Path("../recent_one_year_data")
     local_output_dir: Path = Path(".local")

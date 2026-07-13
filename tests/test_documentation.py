@@ -30,3 +30,5 @@ def test_default_model_matches_project_configuration() -> None:
     assert settings.openai_base_url == "https://api.deepseek.com"
     assert "OPENAI_MODEL=deepseek-v4-pro" in example
     assert "OPENAI_BASE_URL=https://api.deepseek.com" in example
+    assert "LLM_TIMEOUT_SECONDS=120" in example
+    assert "LLM_MAX_RETRIES=5" in example

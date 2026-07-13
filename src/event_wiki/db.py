@@ -373,6 +373,16 @@ class Repository:
         with self.session() as session:
             return [self._candidate_model(row) for row in session.scalars(statement)]
 
+    def update_candidate_status(self, candidate_id: str, status: str) -> None:
+        allowed = {"pending", "processing", "no_event", "awaiting_review", "error", "completed"}
+        if status not in allowed:
+            raise ValueError(f"unsupported candidate status: {status}")
+        with self.session() as session:
+            row = session.get(CandidateRow, candidate_id)
+            if row is None:
+                raise KeyError(candidate_id)
+            row.status = status
+
     @staticmethod
     def _candidate_model(row: CandidateRow) -> CandidateBundle:
         return CandidateBundle.model_validate(

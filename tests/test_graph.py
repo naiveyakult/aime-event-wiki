@@ -39,6 +39,7 @@ class FakeRepository:
         }
         self.patches = {}
         self.committed = []
+        self.candidate_status = "pending"
 
     def get_candidate(self, candidate_id):
         assert candidate_id == "C1"
@@ -57,7 +58,13 @@ class FakeRepository:
         self.committed.append(patch_id)
 
     def list_candidates(self, **_filters):
+        if _filters.get("status") and _filters["status"] != self.candidate_status:
+            return []
         return [self.candidate]
+
+    def update_candidate_status(self, candidate_id, status):
+        assert candidate_id == self.candidate.candidate_id
+        self.candidate_status = status
 
     def list_patches(self):
         return [
@@ -140,6 +147,19 @@ def test_graph_runner_runs_pending_and_resumes_patch() -> None:
     runner.resume_patch(patch_id, "approve")
 
     assert repo.committed == [patch_id]
+    assert repo.candidate_status == "awaiting_review"
+
+
+def test_graph_runner_does_not_repeat_candidate_with_no_event() -> None:
+    repo = FakeRepository()
+    repo.evidence["D1"] = repo.evidence["D1"].model_copy(
+        update={"title": "Daily market recap", "body": "Stocks moved during the session."}
+    )
+    runner = GraphRunner(repo, AgentSuite(HeuristicStructuredClient()), MemorySaver())
+
+    assert runner.run_pending() == 1
+    assert repo.candidate_status == "no_event"
+    assert runner.run_pending() == 0
 
 
 def test_graph_runner_rerun_uses_fresh_revision_thread() -> None:

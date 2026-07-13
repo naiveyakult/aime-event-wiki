@@ -279,6 +279,8 @@ class GraphRunner:
                 api_key=configuration.openai_api_key,
                 base_url=configuration.openai_base_url,
                 model=configuration.openai_model,
+                timeout=configuration.llm_timeout_seconds,
+                max_retries=configuration.llm_max_retries,
             )
         )
         stack = ExitStack()
@@ -308,14 +310,29 @@ class GraphRunner:
             item["thread_id"] for item in (listed() if listed else []) if item.get("thread_id")
         }
         count = 0
+        status_updater = getattr(self.repository, "update_candidate_status", None)
         for candidate in candidates:
             if candidate.candidate_id in existing_threads:
+                if status_updater:
+                    status_updater(candidate.candidate_id, "awaiting_review")
                 continue
             config = {"configurable": {"thread_id": candidate.candidate_id}}
-            self.graph.invoke(
-                {"thread_id": candidate.candidate_id, "candidate_id": candidate.candidate_id},
-                config=config,
-            )
+            if status_updater:
+                status_updater(candidate.candidate_id, "processing")
+            try:
+                result = self.graph.invoke(
+                    {"thread_id": candidate.candidate_id, "candidate_id": candidate.candidate_id},
+                    config=config,
+                )
+            except Exception:
+                if status_updater:
+                    status_updater(candidate.candidate_id, "error")
+                raise
+            if status_updater:
+                status_updater(
+                    candidate.candidate_id,
+                    "awaiting_review" if result.get("patch_ids") else "no_event",
+                )
             count += 1
         return count
 
