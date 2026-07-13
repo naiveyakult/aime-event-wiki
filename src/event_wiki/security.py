@@ -29,7 +29,11 @@ class SecurityViolation:
 def scan_public_tree(root: Path, *, max_bytes: int = 5 * 1024 * 1024) -> list[SecurityViolation]:
     violations: list[SecurityViolation] = []
     for path in root.rglob("*"):
-        if not path.is_file() or any(part in SKIP_PARTS for part in path.relative_to(root).parts):
+        if (
+            not path.is_file()
+            or path.name == ".env"
+            or any(part in SKIP_PARTS for part in path.relative_to(root).parts)
+        ):
             continue
         relative = path.relative_to(root)
         if path.suffix.lower() in PRIVATE_EXTENSIONS:

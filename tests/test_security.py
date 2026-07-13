@@ -25,3 +25,9 @@ def test_security_scan_detects_provider_tokens_and_unquoted_env_values(tmp_path:
     (tmp_path / "config.env.sample").write_text("SERVICE_TOKEN=" + "t" * 32)
     violations = scan_public_tree(tmp_path)
     assert len([item for item in violations if item.code == "secret_pattern"]) == 3
+
+
+def test_security_scan_ignores_local_env_file(tmp_path: Path) -> None:
+    (tmp_path / ".env").write_text("OPENAI_API_KEY='sk-" + "x" * 30 + "'\n")
+
+    assert scan_public_tree(tmp_path) == []
