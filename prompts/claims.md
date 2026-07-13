@@ -1,3 +1,1 @@
-Extract atomic, source-verifiable claims. Preserve exact evidence IDs and a verbatim supporting
-quote. Distinguish confirmed facts, company statements, reported claims, and analyst opinions.
-Never invent missing values or include later price reactions, ratings, or follow-up developments.
+抽取原子化、可由来源验证的 Claim。保留准确的 Evidence ID 和逐字支持引用。区分已确认事实、公司声明、媒体报道和分析师观点。禁止编造缺失值，也不得包含后续价格反应、评级或事件后进展。

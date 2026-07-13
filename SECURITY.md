@@ -1,10 +1,9 @@
-# Public repository data safety
+# 公开仓库数据安全
 
-- Never commit real AIME documents, source excerpts, model outputs, database dumps, or secrets.
-- Keep local artifacts under `.local/`, which is ignored by Git.
-- Tests and examples must use invented companies, symbols, URLs, and numbers.
-- Before every push, run `event-wiki security-scan` and inspect `git diff --cached`.
-- If private material is committed, stop publishing and rotate any exposed credential before
-  rewriting history.
+- 禁止提交真实 AIME 文档、源文摘录、模型输出、数据库转储或任何密钥。
+- 本地产物必须保存在 Git 已忽略的 `.local/` 目录中。
+- 测试和示例必须使用虚构的公司、股票代码、网址和数值。
+- 每次推送前运行 `event-wiki security-scan`，并检查 `git diff --cached`。
+- 如果私有材料被提交，立即停止发布；重写历史前先轮换所有可能泄漏的凭证。
 
-Security reports should be sent privately to the repository owner rather than filed publicly.
+安全问题应私下报告给仓库所有者，不应创建公开 Issue。

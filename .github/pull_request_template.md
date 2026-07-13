@@ -1,13 +1,13 @@
-## Summary
+## 变更摘要
 
-## Contract / behavior
+## 契约与行为
 
-## Tests
+## 测试结果
 
-## Manual verification
+## 手工验证
 
-## Public repository safety
+## 公开仓库安全检查
 
-- [ ] No source data, real excerpts, model outputs, credentials, or database artifacts
-- [ ] Fixtures are synthetic
-- [ ] `event-wiki security-scan` passes
+- [ ] 不包含源数据、真实摘录、模型输出、凭证或数据库产物
+- [ ] 测试夹具完全合成
+- [ ] `event-wiki security-scan` 已通过

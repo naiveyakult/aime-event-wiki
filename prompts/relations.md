@@ -1,3 +1,1 @@
-Extract evidence-backed entity-to-entity relations using only the allowed relation taxonomy.
-Every edge must cite supplied evidence and carry known_at. Mark event-specific inferred paths;
-do not predict return direction or strength and do not turn uncertain relationships into facts.
+只能使用允许的关系分类，抽取有 Evidence 支撑的实体间 Relation。每条边都必须引用输入 Evidence，并携带 `known_at`。针对本次事件推断出的路径必须明确标记；不得预测收益方向或强度，也不得把不确定关系表述为事实。

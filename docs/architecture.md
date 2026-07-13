@@ -1,32 +1,23 @@
-# Architecture
+# 系统架构
 
-## Two graphs, different responsibilities
+## 两种图，各司其职
 
-LangGraph is the durable workflow graph. It controls agent execution, checkpoints, human
-interrupts, retries, and resume behavior. The Event Wiki knowledge graph is the domain model.
-It connects versioned events, entities, atomic claims, relations, and immutable evidence.
+LangGraph 是持久化工作流图，负责 Agent 执行、checkpoint、人工中断、重试和恢复。Event Wiki 知识图谱是领域模型，连接带版本的事件、实体、原子 Claim、Relation 和不可变 Evidence。
 
 ```text
-Evidence ──supports──> Claim ──describes──> Event
-    │                                      │
-    └──────────────supports────────────────┤
-                                           ├──affects──> Entity
-Entity ──supplier/customer/partner/etc.──> Entity
+证据 ──支持──> 主张 ──描述──> 事件
+ │                            │
+ └────────支持────────────────┤
+                              ├──影响──> 实体
+实体 ──供应商/客户/合作伙伴等──> 实体
 ```
 
-Knowledge graph nodes and edges live in PostgreSQL so review approval, optimistic versioning,
-and historical cutoff queries are transactional. `event_edges` is a property-edge projection
-with `known_at`, `valid_from`, and evidence IDs. Graph JSON and Markdown are derived exports.
-Neo4j can be added later as a read projection; it must not become the only source of truth.
+知识图谱节点和边保存在 PostgreSQL 中，因此审核批准、乐观版本控制和历史截止时间查询都可以在事务中完成。`event_edges` 是属性边投影，保存 `known_at`、`valid_from` 和 Evidence ID。Graph JSON 和 Markdown 都是派生导出。未来可以把 Neo4j 作为只读投影加入，但它不能成为唯一事实源。
 
-## Temporal invariant
+## 时间不变量
 
-Every exported fact or edge must satisfy `known_at <= prediction_cutoff`. Event time describes
-when something happened; known time describes when the market could have known it. They are not
-interchangeable.
+每个导出的事实或边都必须满足 `known_at <= prediction_cutoff`。`event_time` 表示事情发生的时间，`known_at` 表示市场最早可能知道该信息的时间，两者不能互换。
 
-## Write authority
+## 写入权限
 
-Agents produce validated `WikiPatch` proposals only. The deterministic committer verifies the
-schema, evidence foreign keys, temporal constraints, audit result, and `base_version`. During the
-MVP every patch pauses at a human review interrupt before a new Wiki version is committed.
+Agent 只能提出通过 Schema 验证的 `WikiPatch`。确定性提交器负责校验 Schema、Evidence 外键、时间约束、审计结果和 `base_version`。MVP 阶段，每个 Patch 都必须在人工审核节点暂停，批准后才能提交新的 Wiki 版本。

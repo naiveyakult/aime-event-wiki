@@ -1,15 +1,12 @@
 # AIME Event Wiki
 
-Evidence-first, temporally safe agents that compile cleaned financial content into a
-versioned Event Wiki. The project is intentionally separated from the private source data:
-the repository contains code and synthetic fixtures only.
+这是一个证据优先、时间安全的多 Agent 系统，用于将清洗后的金融内容整理为带版本的事件 Wiki。项目与私有源数据严格隔离：仓库只包含代码和完全合成的测试夹具。
 
-## Safety boundary
+## 安全边界
 
-Do not commit source JSONL/Parquet files, generated Wiki pages, model outputs, credentials,
-or excerpts copied from the private corpus. Public fixtures must be synthetic.
+禁止提交源 JSONL/Parquet 文件、生成的 Wiki 页面、模型输出、凭证，或从私有语料复制的原文片段。公开测试夹具必须完全合成。
 
-## Quick start
+## 快速开始
 
 ```bash
 python3 -m venv .venv
@@ -19,7 +16,7 @@ docker compose up -d postgres
 .venv/bin/event-wiki --help
 ```
 
-The default data root is `../recent_one_year_data`. Ingestion is read-only.
+默认数据根目录为 `../recent_one_year_data`，入库过程只读取源数据。
 
 ```bash
 event-wiki ingest --month 2025-11
@@ -28,7 +25,7 @@ event-wiki run --limit 20
 event-wiki serve
 ```
 
-Review patches at `http://127.0.0.1:8000/reviews`. Approved versions can be exported with:
+在 `http://127.0.0.1:8000/reviews` 审核 Patch。已批准的版本可通过以下命令导出：
 
 ```bash
 event-wiki export markdown
@@ -37,18 +34,13 @@ event-wiki export audit-report
 event-wiki export graph
 ```
 
-The review server is local-only by default. Set `REVIEW_TOKEN` (or pass
-`--review-token`) before binding it to a non-loopback address.
+审核服务默认只允许本机访问。绑定到非回环地址前，必须设置 `REVIEW_TOKEN` 或传入 `--review-token`。
 
-## Graph model
+## 图结构
 
-The system deliberately uses two graphs. LangGraph is the resumable execution graph for
-discovery, resolution, extraction, audit, review, and commit. PostgreSQL stores the temporal
-knowledge graph: versioned event, entity, claim, relation, and evidence nodes connected by
-evidence-backed edges. `known_at` cutoffs produce historical graph snapshots without leaking
-later information.
+系统有意区分两种图。LangGraph 是可恢复的执行图，负责事件发现、身份解析、知识抽取、审计、人工审核和提交。PostgreSQL 保存时态知识图谱：带版本的 Event、Entity、Claim、Relation、Evidence 节点通过有证据支撑的边连接。使用 `known_at` 截止时间可以生成历史图快照，避免泄漏后续信息。
 
-## Verification
+## 验证
 
 ```bash
 ruff check .
@@ -57,17 +49,12 @@ pytest -q
 event-wiki security-scan
 ```
 
-The test suite includes a fully synthetic 200-document/30-event gold set, graph resume/rerun,
-optimistic locking, temporal leakage, review conflicts, exports, and scale regression tests.
+测试套件包含完全合成的 200 篇文档、30 个事件金标准集，并覆盖图恢复与重跑、乐观锁、时间泄漏、审核冲突、导出和规模回归测试。
 
-## MVP boundaries
+## MVP 边界
 
-`merge_event` and `supersede_claim` remain fail-closed until their explicit mutation contracts
-are introduced; agents cannot silently approximate either operation. A real one-month trial is
-an operational release step because it requires local source ingestion, model credentials, and
-human review. Its generated data and metrics must remain under `.local/` and outside Git.
+在引入明确的变更契约之前，`merge_event` 和 `supersede_claim` 会保持故障关闭，Agent 不会静默执行近似操作。真实一个月试运行属于运行发布阶段，需要本地源数据入库、模型凭证和人工审核。生成的数据和指标必须保存在 `.local/` 下，不能进入 Git。
 
-## Status
+## 当前状态
 
-This repository implements the local MVP and requires human approval for every Wiki patch.
-It has no license; all rights are reserved unless a license is added later.
+仓库已实现本地 MVP，每个 Wiki Patch 都必须经过人工批准。项目暂不附带开源许可证；在未来添加许可证之前，保留全部权利。
