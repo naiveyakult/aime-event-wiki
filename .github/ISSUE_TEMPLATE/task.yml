@@ -1,0 +1,35 @@
+name: Implementation task
+description: A decision-complete Event Wiki task
+title: "TNN: "
+body:
+  - type: textarea
+    id: goal
+    attributes:
+      label: Goal and non-goals
+    validations:
+      required: true
+  - type: textarea
+    id: contracts
+    attributes:
+      label: Input and output contracts
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria and tests
+    validations:
+      required: true
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Dependencies
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Public repository safety
+      options:
+        - label: Uses synthetic fixtures only
+          required: true
+        - label: Does not commit source data or model output
+          required: true

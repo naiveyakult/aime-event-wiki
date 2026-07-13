@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}AIME Event Wiki Review{% endblock %}</title>
+  <style>
+    :root { color-scheme: light; font-family: system-ui, sans-serif; background: #f5f7fa; color: #172033; }
+    body { margin: 0; } header, main { max-width: 1100px; margin: auto; padding: 1.25rem; }
+    header { display: flex; justify-content: space-between; align-items: center; }
+    a { color: #2455b5; } .card { background: white; border: 1px solid #dbe1ea; border-radius: 10px; padding: 1rem; margin-bottom: 1rem; }
+    .badge { display: inline-block; border-radius: 999px; padding: .2rem .6rem; background: #e7edf7; }
+    .BLOCK { background: #ffe0e0; color: #8c1111; } .WARN { background: #fff0c9; color: #6b4900; }
+    pre, textarea { box-sizing: border-box; width: 100%; overflow: auto; background: #f7f8fb; border: 1px solid #dbe1ea; border-radius: 6px; padding: .75rem; }
+    button { border: 0; border-radius: 6px; padding: .55rem .9rem; cursor: pointer; background: #2455b5; color: white; }
+    button.danger { background: #a92525; } button.secondary { background: #586174; }
+    form.inline { display: inline; } .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+    @media (max-width: 720px) { .grid { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body><header><h1>AIME Event Wiki</h1><a href="/reviews">Review queue</a></header><main>{% block content %}{% endblock %}</main></body>
+</html>

@@ -1,0 +1,34 @@
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Private/raw/generated data (public repository safety boundary)
+.local/
+wiki/
+outputs/
+reports/
+checkpoints/
+*.jsonl
+*.ndjson
+*.parquet
+*.duckdb
+*.sqlite*
+*.db
+*.log
+recent_one_year_data/
+
+# Python/tooling
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+.DS_Store

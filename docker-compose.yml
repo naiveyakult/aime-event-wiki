@@ -1,0 +1,19 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: event_wiki
+      POSTGRES_USER: event_wiki
+      POSTGRES_PASSWORD: event_wiki
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U event_wiki"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - event_wiki_postgres:/var/lib/postgresql/data
+
+volumes:
+  event_wiki_postgres:

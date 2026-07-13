@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}{{ patch.patch_id }} · Review{% endblock %}
+{% block content %}
+<h2>{{ patch.patch_id }}</h2>
+<p><span class="badge {{ patch.audit.status if patch.audit else '' }}">{{ patch.audit.status if patch.audit else 'UNAUDITED' }}</span> {{ patch.operation }}</p>
+<div class="grid">
+  <section class="card"><h3>Evidence</h3>{% for item in patch.evidence or [] %}<p><strong>{{ item.evidence_id }}</strong><br>{{ item.title }}<br>{{ item.body or '' }}</p>{% else %}<p>Evidence IDs: {{ (patch.evidence_ids or [])|join(', ') }}</p>{% endfor %}</section>
+  <section class="card"><h3>Audit issues</h3>{% for issue in (patch.audit.issues if patch.audit else []) %}<p><strong>{{ issue.code or 'audit' }}</strong>: {{ issue.message }}</p>{% else %}<p>No audit issues.</p>{% endfor %}</section>
+</div>
+<div class="grid">
+  <section class="card"><h3>Current event snapshot</h3><pre>{{ current_event_json }}</pre></section>
+  <section class="card"><h3>Review history</h3><pre>{{ review_history_json }}</pre></section>
+</div>
+<section class="card"><h3>Patch payload</h3><form method="post" action="/reviews/{{ patch.patch_id }}/edit"><textarea name="payload" rows="18">{{ payload_json }}</textarea><button type="submit">Edit and approve</button></form></section>
+<section class="card">
+  <form class="inline" method="post" action="/reviews/{{ patch.patch_id }}/approve"><button>Approve</button></form>
+  <form class="inline" method="post" action="/reviews/{{ patch.patch_id }}/rerun"><button class="secondary">Return for rerun</button></form>
+  <form method="post" action="/reviews/{{ patch.patch_id }}/reject"><label>Reason <input name="reason"></label> <button class="danger">Reject</button></form>
+</section>
+{% endblock %}

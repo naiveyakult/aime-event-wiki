@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}Review queue · AIME Event Wiki{% endblock %}
+{% block content %}
+<h2>Pending patches</h2>
+{% for patch in patches %}
+<article class="card">
+  <span class="badge {{ patch.audit.status if patch.audit else '' }}">{{ patch.audit.status if patch.audit else 'UNAUDITED' }}</span>
+  <h3><a href="/reviews/{{ patch.patch_id }}">{{ patch.patch_id }}</a></h3>
+  <p>{{ patch.operation }}{% if patch.event_id %} · {{ patch.event_id }}{% endif %}</p>
+</article>
+{% else %}<div class="card">No patches are waiting for review.</div>{% endfor %}
+{% endblock %}
