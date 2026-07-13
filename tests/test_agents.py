@@ -79,6 +79,55 @@ def test_claims_and_relations_preserve_evidence_provenance() -> None:
     assert patch.event_id == patch.payload["event"]["event_id"]
 
 
+def test_claim_evidence_is_rebound_to_documents_containing_the_quote() -> None:
+    class MultiEvidenceClaimClient(HeuristicStructuredClient):
+        def _extract_claims(self, context):  # noqa: ANN001
+            proposal = context["proposal"]
+            return {
+                "claims": [
+                    {
+                        "claim_id": "CLAIM_1",
+                        "subject": proposal["event_subject"],
+                        "predicate": "posted",
+                        "object_value": "the investor presentation",
+                        "kind": "company_statement",
+                        "event_time": proposal["event_time"],
+                        "known_at": proposal["known_at"],
+                        "evidence_ids": ["D1", "D2"],
+                        "quote": "Example posted the investor presentation.",
+                        "confidence": 1.0,
+                    }
+                ]
+            }
+
+    evidence = [
+        document("D1", "Example SEC Form 8-K", "Please enable JavaScript to use the viewer."),
+        document(
+            "D2",
+            "Example SEC Form 8-K",
+            "Example posted the investor presentation. It was furnished as an exhibit.",
+        ),
+    ]
+    suite = AgentSuite(MultiEvidenceClaimClient())
+    candidate = CandidateBundle(
+        candidate_id="C1",
+        evidence_ids=["D1", "D2"],
+        window_start=NOW,
+        window_end=NOW,
+        symbols=["EXM"],
+        entity_names=["Example Corp"],
+    )
+    proposal = suite.discover(candidate, evidence)[0].model_copy(
+        update={"evidence_ids": ["D1", "D2"]}
+    )
+
+    claims = suite.extract_claims(proposal, evidence)
+
+    assert len(claims) == 1
+    assert claims[0].evidence_ids == ["D2"]
+    assert suite.audit(claims, [], evidence, NOW).issues == []
+
+
 def test_relation_agent_merges_duplicate_relation_evidence() -> None:
     candidate = CandidateBundle(
         candidate_id="C1",

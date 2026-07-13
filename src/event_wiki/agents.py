@@ -59,6 +59,10 @@ def _dump(value: Any) -> Any:
     return value
 
 
+def _normalized_text(value: str) -> str:
+    return " ".join(value.lower().split())
+
+
 def _prompt(name: str) -> str:
     return (PROMPT_ROOT / f"{name}.md").read_text(encoding="utf-8")
 
@@ -261,8 +265,25 @@ class AgentSuite:
             output_model=ClaimBatch,
             context={"proposal": _dump(proposal), "evidence": _dump(evidence)},
         )
-        allowed = {item.evidence_id for item in evidence}
-        return [claim for claim in result.claims if set(claim.evidence_ids) <= allowed]
+        documents = {item.evidence_id: item for item in evidence}
+        claims: list[Claim] = []
+        for claim in result.claims:
+            if not set(claim.evidence_ids) <= set(documents):
+                continue
+            quote = _normalized_text(claim.quote)
+            supporting_ids = [
+                evidence_id
+                for evidence_id in claim.evidence_ids
+                if quote
+                and quote
+                in _normalized_text(
+                    f"{documents[evidence_id].title} {documents[evidence_id].body}"
+                )
+            ]
+            if not supporting_ids:
+                continue
+            claims.append(claim.model_copy(update={"evidence_ids": supporting_ids}))
+        return claims
 
     def build_relations(
         self, proposal: EventProposal, evidence: list[EvidenceDocument]
