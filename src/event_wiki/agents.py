@@ -47,7 +47,7 @@ class ClaimBatch(BaseModel):
 
 
 class RelationBatch(BaseModel):
-    relations: list[Relation] = Field(default_factory=list)
+    relations: list[Relation] = Field(default_factory=list, max_length=MAX_CLAIMS_PER_CHUNK)
 
 
 def _stable_id(prefix: str, *parts: str) -> str:
@@ -118,6 +118,7 @@ def _is_retryable_truncation(error: BaseException) -> bool:
             "incomplete chunked read" in message
             or "complete message body" in message
             or "eof while parsing" in message
+            or "empty structured response" in message
         ):
             return True
         current = current.__cause__
@@ -359,7 +360,11 @@ class AgentSuite:
         return list(claims.values())
 
     def _extract_claim_chunk(
-        self, proposal: EventProposal, document: EvidenceDocument
+        self,
+        proposal: EventProposal,
+        document: EvidenceDocument,
+        *,
+        same_retry_used: bool = False,
     ) -> list[Claim]:
         try:
             result = self.client.invoke(
@@ -374,11 +379,14 @@ class AgentSuite:
             )
             return result.claims
         except Exception as error:
-            if (
-                not _is_retryable_truncation(error)
-                or len(document.body) <= CLAIM_RETRY_MIN_CHARS
-            ):
+            if not _is_retryable_truncation(error):
                 raise
+            if len(document.body) <= CLAIM_RETRY_MIN_CHARS:
+                if same_retry_used:
+                    raise
+                return self._extract_claim_chunk(
+                    proposal, document, same_retry_used=True
+                )
             retry_chars = max(CLAIM_RETRY_MIN_CHARS, len(document.body) // 2)
             retry_chunks = _chunk_document(
                 document,
@@ -395,24 +403,30 @@ class AgentSuite:
     def build_relations(
         self, proposal: EventProposal, evidence: list[EvidenceDocument]
     ) -> list[Relation]:
-        result = self.client.invoke(
-            task="build_relations",
-            prompt=_prompt("relations"),
-            output_model=RelationBatch,
-            context={"proposal": _dump(proposal), "evidence": _dump(evidence)},
-        )
+        extracted: list[Relation] = []
+        for document in evidence:
+            for chunk in _chunk_document(document):
+                extracted.extend(self._extract_relation_chunk(proposal, chunk))
         allowed = {item.evidence_id for item in evidence}
         relations = [
-            relation for relation in result.relations if set(relation.evidence_ids) <= allowed
+            relation for relation in extracted if set(relation.evidence_ids) <= allowed
         ]
         merged: dict[str, Relation] = {}
         for relation in relations:
-            previous = merged.get(relation.relation_id)
+            relation_id = _stable_id(
+                "relation",
+                relation.source_entity,
+                relation.target_entity,
+                str(relation.relation_type),
+                str(relation.inferred_for_event),
+            )
+            relation = relation.model_copy(update={"relation_id": relation_id})
+            previous = merged.get(relation_id)
             if previous is None:
-                merged[relation.relation_id] = relation
+                merged[relation_id] = relation
                 continue
             valid_values = [value for value in (previous.valid_from, relation.valid_from) if value]
-            merged[relation.relation_id] = previous.model_copy(
+            merged[relation_id] = previous.model_copy(
                 update={
                     "evidence_ids": sorted(set(previous.evidence_ids) | set(relation.evidence_ids)),
                     "known_at": min(previous.known_at, relation.known_at),
@@ -421,6 +435,47 @@ class AgentSuite:
                 }
             )
         return list(merged.values())
+
+    def _extract_relation_chunk(
+        self,
+        proposal: EventProposal,
+        document: EvidenceDocument,
+        *,
+        same_retry_used: bool = False,
+    ) -> list[Relation]:
+        try:
+            result = self.client.invoke(
+                task="build_relations",
+                prompt=_prompt("relations"),
+                output_model=RelationBatch,
+                context={
+                    "proposal": _dump(proposal),
+                    "evidence": _dump([document]),
+                    "max_relations": MAX_CLAIMS_PER_CHUNK,
+                },
+            )
+            return result.relations
+        except Exception as error:
+            if not _is_retryable_truncation(error):
+                raise
+            if len(document.body) <= CLAIM_RETRY_MIN_CHARS:
+                if same_retry_used:
+                    raise
+                return self._extract_relation_chunk(
+                    proposal, document, same_retry_used=True
+                )
+            retry_chars = max(CLAIM_RETRY_MIN_CHARS, len(document.body) // 2)
+            retry_chunks = _chunk_document(
+                document,
+                max_chars=retry_chars,
+                overlap_chars=min(CLAIM_CHUNK_OVERLAP, retry_chars // 5),
+            )
+            if len(retry_chunks) <= 1:
+                raise
+            relations: list[Relation] = []
+            for chunk in retry_chunks:
+                relations.extend(self._extract_relation_chunk(proposal, chunk))
+            return relations
 
     def audit(
         self,

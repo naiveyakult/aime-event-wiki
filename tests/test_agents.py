@@ -289,6 +289,38 @@ def test_claim_extraction_retries_truncated_json_with_smaller_chunks() -> None:
     assert claims
 
 
+def test_claim_extraction_retries_a_failed_minimum_chunk_once() -> None:
+    class FlakyMinimumChunkClient(HeuristicStructuredClient):
+        def __init__(self) -> None:
+            self.attempts = 0
+
+        def _extract_claims(self, context):  # noqa: ANN001
+            self.attempts += 1
+            if self.attempts == 1:
+                raise ValueError("Invalid JSON: EOF while parsing a string")
+            return super()._extract_claims(context)
+
+    evidence = [
+        document("D1", "Example SEC earnings", "Example reported revenue of $10 million.")
+    ]
+    client = FlakyMinimumChunkClient()
+    suite = AgentSuite(client)
+    candidate = CandidateBundle(
+        candidate_id="C1",
+        evidence_ids=["D1"],
+        window_start=NOW,
+        window_end=NOW,
+        symbols=["EXM"],
+        entity_names=["Example Corp"],
+    )
+    proposal = suite.discover(candidate, evidence)[0]
+
+    claims = suite.extract_claims(proposal, evidence)
+
+    assert client.attempts == 2
+    assert claims
+
+
 def test_relation_agent_merges_duplicate_relation_evidence() -> None:
     candidate = CandidateBundle(
         candidate_id="C1",
@@ -311,6 +343,67 @@ def test_relation_agent_merges_duplicate_relation_evidence() -> None:
 
     assert len(relations) == 1
     assert relations[0].evidence_ids == ["D1", "D2"]
+
+
+def test_relation_extraction_chunks_long_evidence_and_merges_duplicates() -> None:
+    class RecordingRelationClient(HeuristicStructuredClient):
+        def __init__(self) -> None:
+            self.body_lengths: list[int] = []
+
+        def _build_relations(self, context):  # noqa: ANN001
+            self.body_lengths.append(len(context["evidence"][0]["body"]))
+            return super()._build_relations(context)
+
+    body = " ".join(f"Example Corp and EXM relation sentence {index}." for index in range(100))
+    evidence = [document("D1", "Example launches a product", body)]
+    client = RecordingRelationClient()
+    suite = AgentSuite(client)
+    candidate = CandidateBundle(
+        candidate_id="C1",
+        evidence_ids=["D1"],
+        window_start=NOW,
+        window_end=NOW,
+        symbols=["EXM"],
+        entity_names=["Example Corp"],
+    )
+    proposal = suite.discover(candidate, evidence)[0]
+
+    relations = suite.build_relations(proposal, evidence)
+
+    assert len(client.body_lengths) > 1
+    assert max(client.body_lengths) <= 1_000
+    assert len(relations) == 1
+    assert relations[0].evidence_ids == ["D1"]
+
+
+def test_relation_extraction_retries_empty_minimum_chunk_once() -> None:
+    class EmptyOnceRelationClient(HeuristicStructuredClient):
+        def __init__(self) -> None:
+            self.attempts = 0
+
+        def _build_relations(self, context):  # noqa: ANN001
+            self.attempts += 1
+            if self.attempts == 1:
+                raise ValueError("build_relations returned an empty structured response")
+            return super()._build_relations(context)
+
+    evidence = [document("D1", "Example launches a product", "Example launched Widget One.")]
+    client = EmptyOnceRelationClient()
+    suite = AgentSuite(client)
+    candidate = CandidateBundle(
+        candidate_id="C1",
+        evidence_ids=["D1"],
+        window_start=NOW,
+        window_end=NOW,
+        symbols=["EXM"],
+        entity_names=["Example Corp"],
+    )
+    proposal = suite.discover(candidate, evidence)[0]
+
+    relations = suite.build_relations(proposal, evidence)
+
+    assert client.attempts == 2
+    assert relations
 
 
 def test_multiple_proposals_create_isolated_patches() -> None:
