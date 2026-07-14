@@ -49,6 +49,8 @@ def test_structured_client_falls_back_to_json_object_when_json_schema_is_unavail
     assert result == Result(value="ok")
     assert completions.calls[0]["response_format"]["type"] == "json_schema"
     assert completions.calls[1]["response_format"] == {"type": "json_object"}
+    assert completions.calls[0]["max_tokens"] == 2_048
+    assert completions.calls[1]["max_tokens"] == 2_048
     assert "JSON Schema" in completions.calls[1]["messages"][0]["content"]
 
     client.invoke(
@@ -59,6 +61,26 @@ def test_structured_client_falls_back_to_json_object_when_json_schema_is_unavail
     )
     assert len(completions.calls) == 3
     assert completions.calls[2]["response_format"] == {"type": "json_object"}
+
+
+def test_structured_client_uses_larger_output_budget_for_claim_extraction() -> None:
+    completions = FakeCompletions()
+    fake_client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+    client = OpenAICompatibleStructuredClient(
+        api_key="synthetic-key",
+        model="synthetic-model",
+        client=fake_client,
+    )
+
+    client.invoke(
+        task="extract_claims",
+        prompt="Extract claims.",
+        output_model=Result,
+        context={"input": "synthetic"},
+    )
+
+    assert completions.calls[0]["max_tokens"] == 4_096
+    assert completions.calls[1]["max_tokens"] == 4_096
 
 
 def test_structured_client_configures_bounded_transport_retries(monkeypatch) -> None:

@@ -66,3 +66,24 @@ def test_audit_blocks_number_not_present_in_quote() -> None:
     result = audit_knowledge([unsupported], [], {"DOC_1": evidence()}, EVENT_TIME)
 
     assert any(issue.code == "unsupported_number" for issue in result.issues)
+
+
+def test_audit_treats_scaled_and_expanded_numbers_as_equivalent() -> None:
+    expanded = claim(EVENT_TIME).model_copy(update={"object_value": "$10,000,000"})
+
+    result = audit_knowledge([expanded], [], {"DOC_1": evidence()}, EVENT_TIME)
+
+    assert not any(issue.code == "unsupported_number" for issue in result.issues)
+
+
+def test_audit_normalizes_decimal_financial_scales() -> None:
+    document = evidence().model_copy(
+        update={"body": "Example reported assets of $1.5 billion."}
+    )
+    scaled = claim(EVENT_TIME, "assets of $1.5 billion").model_copy(
+        update={"predicate": "reported_assets", "object_value": "$1,500,000,000"}
+    )
+
+    result = audit_knowledge([scaled], [], {"DOC_1": document}, EVENT_TIME)
+
+    assert not any(issue.code == "unsupported_number" for issue in result.issues)

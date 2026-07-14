@@ -1,3 +1,4 @@
+from click import unstyle
 from typer.testing import CliRunner
 
 from event_wiki.cli import app, settings
@@ -25,4 +26,4 @@ def test_serve_requires_token_for_non_loopback_host() -> None:
     result = CliRunner().invoke(app, ["serve", "--host", "0.0.0.0"])
 
     assert result.exit_code != 0
-    assert "review-token is required" in result.output
+    assert "review-token is required" in unstyle(result.output)
