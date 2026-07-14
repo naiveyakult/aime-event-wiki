@@ -48,6 +48,75 @@ def test_discovery_can_emit_multiple_events_from_one_candidate() -> None:
     assert all(proposal.evidence_ids for proposal in proposals)
 
 
+def test_discovery_replaces_model_ids_with_stable_unique_ids() -> None:
+    class ReusedModelIdClient(HeuristicStructuredClient):
+        def _discover_event(self, context):  # noqa: ANN001
+            document = context["evidence"][0]
+            return {
+                "proposals": [
+                    {
+                        "proposal_id": "PROP_1",
+                        "candidate_id": "MODEL_SUPPLIED_CANDIDATE",
+                        "event_family": "product_partnership",
+                        "event_subject": document["entity_names"][0],
+                        "event_title": document["title"],
+                        "event_time": document["published_at"],
+                        "known_at": document["known_at"],
+                        "primary_symbols": document["symbols"],
+                        "evidence_ids": [document["evidence_id"]],
+                        "reason": "Synthetic model proposal.",
+                    }
+                ]
+            }
+
+    suite = AgentSuite(ReusedModelIdClient())
+    first_candidate = CandidateBundle(
+        candidate_id="CAND_A",
+        evidence_ids=["D1"],
+        window_start=NOW,
+        window_end=NOW,
+    )
+    second_candidate = CandidateBundle(
+        candidate_id="CAND_B",
+        evidence_ids=["D2"],
+        window_start=NOW,
+        window_end=NOW,
+    )
+    first_evidence = [document("D1", "Example launches Alpha", "Example launched Alpha.")]
+    second_evidence = [document("D2", "Example launches Beta", "Example launched Beta.")]
+
+    first = suite.discover(first_candidate, first_evidence)[0]
+    repeated = suite.discover(first_candidate, first_evidence)[0]
+    second = suite.discover(second_candidate, second_evidence)[0]
+
+    assert first.candidate_id == "CAND_A"
+    assert first.proposal_id != "PROP_1"
+    assert first.proposal_id == repeated.proposal_id
+    assert first.proposal_id != second.proposal_id
+
+    repository = type("Repo", (), {"find_events": lambda *_a, **_k: []})()
+    first_decision = suite.resolve([first], repository)
+    second_decision = suite.resolve([second], repository)
+    first_patch = suite.propose_patch(
+        thread_id="CAND_A",
+        proposals=[first],
+        decisions=first_decision,
+        claims=[],
+        relations=[],
+        audit=suite.audit([], [], first_evidence, NOW),
+    )
+    second_patch = suite.propose_patch(
+        thread_id="CAND_B",
+        proposals=[second],
+        decisions=second_decision,
+        claims=[],
+        relations=[],
+        audit=suite.audit([], [], second_evidence, NOW),
+    )
+
+    assert first_patch.event_id != second_patch.event_id
+
+
 def test_claims_and_relations_preserve_evidence_provenance() -> None:
     candidate = CandidateBundle(
         candidate_id="C1",
