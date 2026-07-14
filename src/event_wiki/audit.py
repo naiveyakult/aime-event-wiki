@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime
+from decimal import Decimal
 
 from event_wiki.models import (
     AuditIssue,
@@ -17,8 +18,33 @@ def _normalized(value: str) -> str:
     return " ".join(value.lower().split())
 
 
+_NUMBER_PATTERN = re.compile(
+    r"(?<![\w.])(\d[\d,]*(?:\.\d+)?)\s*(thousand|million|billion|trillion)?\b",
+    re.IGNORECASE,
+)
+_SCALE_MULTIPLIERS = {
+    "thousand": Decimal(1_000),
+    "million": Decimal(1_000_000),
+    "billion": Decimal(1_000_000_000),
+    "trillion": Decimal(1_000_000_000_000),
+}
+
+
+def _canonical_number(value: str, scale: str | None) -> str:
+    number = Decimal(value.replace(",", ""))
+    if scale:
+        number *= _SCALE_MULTIPLIERS[scale.lower()]
+    canonical = format(number, "f")
+    if "." in canonical:
+        canonical = canonical.rstrip("0").rstrip(".")
+    return canonical
+
+
 def _numbers(value: str) -> set[str]:
-    return {token.replace(",", "") for token in re.findall(r"\d[\d,]*(?:\.\d+)?", value)}
+    return {
+        _canonical_number(number, scale or None)
+        for number, scale in _NUMBER_PATTERN.findall(value)
+    }
 
 
 def _mentions(document: EvidenceDocument, entity: str) -> bool:
