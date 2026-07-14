@@ -7,6 +7,7 @@
   <section class="card"><h3>Evidence</h3>{% for item in patch.evidence or [] %}<p><strong>{{ item.evidence_id }}</strong><br>{{ item.title }}<br>{{ item.body or '' }}</p>{% else %}<p>Evidence IDs: {{ (patch.evidence_ids or [])|join(', ') }}</p>{% endfor %}</section>
   <section class="card"><h3>Audit issues</h3>{% for issue in (patch.audit.issues if patch.audit else []) %}<p><strong>{{ issue.code or 'audit' }}</strong>: {{ issue.message }}</p>{% else %}<p>No audit issues.</p>{% endfor %}</section>
 </div>
+{% if patch.payload.event_link %}<section class="card"><h3>关联事件</h3><pre>{{ linked_events_json }}</pre><p>{{ patch.payload.event_link.source_event_id }} → <strong>{{ patch.payload.event_link.link_type }}</strong> → {{ patch.payload.event_link.target_event_id }}</p><p>{{ patch.payload.event_link.rationale }}</p></section>{% endif %}
 <div class="grid">
   <section class="card"><h3>Current event snapshot</h3><pre>{{ current_event_json }}</pre></section>
   <section class="card"><h3>Review history</h3><pre>{{ review_history_json }}</pre></section>

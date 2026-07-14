@@ -189,6 +189,7 @@ def build_graph(repository: Any, suite: AgentSuite, checkpointer: Any | None = N
         return result
 
     def commit(state):
+        committed_event_ids = []
         for patch_id, decision in zip(state["patch_ids"], state["review_decisions"], strict=True):
             if decision != "approve":
                 continue
@@ -197,6 +198,15 @@ def build_graph(repository: Any, suite: AgentSuite, checkpointer: Any | None = N
                 committer(patch_id)
             else:
                 repository.commit_approved_patch(patch_id)
+            stored = repository.get_patch(patch_id) or {}
+            if stored.get("event_id"):
+                committed_event_ids.append(stored["event_id"])
+        if committed_event_ids and hasattr(repository, "find_link_candidates"):
+            from event_wiki.link_graph import EventLinkRunner
+
+            linker = EventLinkRunner(repository, suite)
+            for event_id in committed_event_ids:
+                linker.run(event_id)
         return {}
 
     graph = StateGraph(GraphState)
@@ -352,6 +362,15 @@ class GraphRunner:
             raise KeyError(patch_id)
         normalized = decision.lower() if decision else None
         status = str(patch.get("status", "pending")).lower()
+        if patch.get("operation") in {"add_event_link", "supplement_event_link"}:
+            if normalized not in {"approve", "reject"}:
+                raise ValueError("event link review decision must be approve or reject")
+            if status == "pending":
+                self.repository.review_patch(patch_id, normalized, reviewer="langgraph")
+                status = normalized
+            if normalized == "approve" and status in {"approve", "approved"}:
+                return self.repository.commit_approved_patch(patch_id)
+            return None
         if normalized is None:
             if status in {"approved", "committed"}:
                 normalized = "approve"
@@ -379,6 +398,23 @@ class GraphRunner:
             raise ValueError("decision must be approve, reject, or rerun")
         config = {"configurable": {"thread_id": patch["thread_id"]}}
         snapshot = self.graph.get_state(config)
+        if not snapshot.values:
+            reviewer = getattr(self.repository, "review_patch", None)
+            if status == "pending":
+                if reviewer is None:
+                    raise ValueError("repository does not support review recovery")
+                reviewer(patch_id, normalized, reviewer="langgraph-recovery")
+            if normalized == "reject":
+                return None
+            version = self.repository.commit_approved_patch(patch_id)
+            stored = self.repository.get_patch(patch_id) or patch
+            event_id = stored.get("event_id")
+            result = {"patch_id": patch_id, "event_id": event_id, "version": version}
+            if event_id and hasattr(self.repository, "find_link_candidates"):
+                from event_wiki.link_graph import EventLinkRunner
+
+                result["event_links"] = EventLinkRunner(self.repository, self.suite).run(event_id)
+            return result
         if snapshot.interrupts:
             current = snapshot.interrupts[0].value
             expected_patch_id = current.get("patch_id") if isinstance(current, dict) else None

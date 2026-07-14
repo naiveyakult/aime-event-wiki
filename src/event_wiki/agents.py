@@ -18,6 +18,8 @@ from event_wiki.models import (
     DecisionType,
     EventDecision,
     EventFamily,
+    EventLink,
+    EventLinkBatch,
     EventProposal,
     EvidenceDocument,
     Relation,
@@ -80,9 +82,7 @@ def canonicalize_proposals(
         identity = _proposal_identity_parts(normalized)
         unique.setdefault(identity, normalized)
     return [
-        proposal.model_copy(
-            update={"proposal_id": _stable_id("proposal", *identity)}
-        )
+        proposal.model_copy(update={"proposal_id": _stable_id("proposal", *identity)})
         for identity, proposal in sorted(unique.items())
     ]
 
@@ -111,8 +111,7 @@ def _text_chunks(value: str, *, max_chars: int, overlap_chars: int) -> list[str]
         if hard_end < len(text):
             search_start = start + max_chars // 2
             boundaries = [
-                text.rfind(marker, search_start, hard_end)
-                for marker in ("\n\n", ". ", "! ", "? ")
+                text.rfind(marker, search_start, hard_end) for marker in ("\n\n", ". ", "! ", "? ")
             ]
             boundary = max(boundaries)
             if boundary >= search_start:
@@ -303,6 +302,10 @@ class HeuristicStructuredClient:
                 )
         return {"relations": relations}
 
+    def _link_events(self, context: dict[str, Any]) -> dict[str, Any]:
+        del context
+        return {"links": []}
+
 
 class AgentSuite:
     def __init__(self, client: StructuredLLM, *, prompt_version: str = PROMPT_VERSION) -> None:
@@ -320,11 +323,7 @@ class AgentSuite:
             context={"candidate": _dump(candidate), "evidence": _dump(evidence)},
         )
         allowed = set(candidate.evidence_ids)
-        valid = [
-            proposal
-            for proposal in result.proposals
-            if set(proposal.evidence_ids) <= allowed
-        ]
+        valid = [proposal for proposal in result.proposals if set(proposal.evidence_ids) <= allowed]
         return canonicalize_proposals(candidate.candidate_id, valid)
 
     def resolve(self, proposals: list[EventProposal], repository: Any) -> list[EventDecision]:
@@ -373,9 +372,7 @@ class AgentSuite:
                 for evidence_id in claim.evidence_ids
                 if quote
                 and quote
-                in _normalized_text(
-                    f"{documents[evidence_id].title} {documents[evidence_id].body}"
-                )
+                in _normalized_text(f"{documents[evidence_id].title} {documents[evidence_id].body}")
             ]
             if not supporting_ids:
                 continue
@@ -421,9 +418,7 @@ class AgentSuite:
             if len(document.body) <= CLAIM_RETRY_MIN_CHARS:
                 if same_retry_used:
                     raise
-                return self._extract_claim_chunk(
-                    proposal, document, same_retry_used=True
-                )
+                return self._extract_claim_chunk(proposal, document, same_retry_used=True)
             retry_chars = max(CLAIM_RETRY_MIN_CHARS, len(document.body) // 2)
             retry_chunks = _chunk_document(
                 document,
@@ -445,9 +440,7 @@ class AgentSuite:
             for chunk in _chunk_document(document):
                 extracted.extend(self._extract_relation_chunk(proposal, chunk))
         allowed = {item.evidence_id for item in evidence}
-        relations = [
-            relation for relation in extracted if set(relation.evidence_ids) <= allowed
-        ]
+        relations = [relation for relation in extracted if set(relation.evidence_ids) <= allowed]
         merged: dict[str, Relation] = {}
         for relation in relations:
             relation_id = _stable_id(
@@ -472,6 +465,38 @@ class AgentSuite:
                 }
             )
         return list(merged.values())
+
+    def link_events(
+        self,
+        source_event: dict[str, Any],
+        candidate_events: list[dict[str, Any]],
+        evidence: list[EvidenceDocument],
+    ) -> list[EventLink]:
+        result = self.client.invoke(
+            task="link_events",
+            prompt=_prompt("event_links"),
+            output_model=EventLinkBatch,
+            context={
+                "source_event": source_event,
+                "candidate_events": candidate_events,
+                "evidence": _dump(evidence),
+            },
+        )
+        allowed_targets = {item["event_id"] for item in candidate_events}
+        allowed_evidence = {item.evidence_id for item in evidence}
+        links: dict[str, EventLink] = {}
+        for link in result.links:
+            if link.source_event_id != source_event.get("event_id"):
+                continue
+            if link.target_event_id not in allowed_targets:
+                continue
+            if not {item.evidence_id for item in link.evidence_quotes} <= allowed_evidence:
+                continue
+            link_id = _stable_id(
+                "link", link.source_event_id, link.target_event_id, str(link.link_type)
+            )
+            links[link_id] = link.model_copy(update={"link_id": link_id})
+        return list(links.values())
 
     def _extract_relation_chunk(
         self,
@@ -498,9 +523,7 @@ class AgentSuite:
             if len(document.body) <= CLAIM_RETRY_MIN_CHARS:
                 if same_retry_used:
                     raise
-                return self._extract_relation_chunk(
-                    proposal, document, same_retry_used=True
-                )
+                return self._extract_relation_chunk(proposal, document, same_retry_used=True)
             retry_chars = max(CLAIM_RETRY_MIN_CHARS, len(document.body) // 2)
             retry_chunks = _chunk_document(
                 document,
@@ -619,9 +642,7 @@ class AgentSuite:
             operation = WikiOperation.UPDATE_METADATA
         created_at = datetime.now(UTC)
         event_id = decision.existing_event_id or canonical_event_id(proposal)
-        patch_id = _stable_id(
-            "patch", thread_id, event_id, *evidence_ids, str(base_version)
-        )
+        patch_id = _stable_id("patch", thread_id, event_id, *evidence_ids, str(base_version))
         claim_payload = [
             item.model_dump(mode="json", exclude={"schema_version"}) for item in claims
         ]

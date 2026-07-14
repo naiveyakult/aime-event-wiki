@@ -135,3 +135,41 @@ def test_non_loopback_access_requires_configured_review_token() -> None:
     assert protected.get("/reviews").status_code == 401
     response = protected.get("/reviews", headers={"Authorization": "Bearer synthetic-review-token"})
     assert response.status_code == 200
+
+
+def test_low_risk_event_links_can_be_batch_approved() -> None:
+    repository = FakeReviewRepository()
+    repository.patches = {
+        f"LINK_PATCH_{index}": {
+            "patch_id": f"LINK_PATCH_{index}",
+            "status": "pending",
+            "operation": "add_event_link",
+            "event_id": "EVENT_1",
+            "payload": {
+                "event_link": {
+                    "source_event_id": "EVENT_1",
+                    "target_event_id": f"EVENT_{index + 1}",
+                    "link_type": "same_driver",
+                    "inferred": True,
+                    "confidence": 0.9,
+                }
+            },
+            "audit": {"status": "PASS", "issues": [], "disposition": "batch_review"},
+        }
+        for index in (1, 2)
+    }
+    resumed: list[str] = []
+    client = TestClient(create_app(repository, resume_callback=resumed.append))
+
+    response = client.post(
+        "/reviews/links/batch",
+        data={
+            "patch_ids": ["LINK_PATCH_1", "LINK_PATCH_2"],
+            "decision": "approve",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert resumed == ["LINK_PATCH_1", "LINK_PATCH_2"]
+    assert all(patch["status"] == "approved" for patch in repository.patches.values())

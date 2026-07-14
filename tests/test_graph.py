@@ -176,6 +176,46 @@ def test_graph_runner_rerun_uses_fresh_revision_thread() -> None:
     )
 
 
+def test_graph_runner_commits_approved_patch_after_memory_checkpoint_restart() -> None:
+    with TemporaryDirectory() as directory:
+        repo = Repository.from_url(f"sqlite+pysqlite:///{directory}/wiki.db", create_schema=True)
+        repo.upsert_evidence(
+            EvidenceDocument(
+                evidence_id="D-RESTART",
+                content_type="US_NEWS",
+                title="Example reports quarterly earnings",
+                body="Example reported revenue of $10 million.",
+                published_at=NOW,
+                known_at=NOW,
+                source_name="Synthetic Wire",
+                symbols=["EXM"],
+                entity_names=["Example Corp"],
+                source_locator="synthetic://restart",
+                content_hash="c" * 64,
+            )
+        )
+        repo.save_candidate(
+            CandidateBundle(
+                candidate_id="C-RESTART",
+                evidence_ids=["D-RESTART"],
+                window_start=NOW,
+                window_end=NOW,
+                symbols=["EXM"],
+                entity_names=["Example Corp"],
+            )
+        )
+        first_runner = GraphRunner(repo, AgentSuite(HeuristicStructuredClient()), MemorySaver())
+        assert first_runner.run_pending() == 1
+        patch_id = repo.list_pending_patches()[0]["patch_id"]
+        repo.review_patch(patch_id, "approve", reviewer="test")
+
+        restarted_runner = GraphRunner(repo, AgentSuite(HeuristicStructuredClient()), MemorySaver())
+        restarted_runner.resume_patch(patch_id)
+
+        assert repo.status_counts()["events"] == 1
+        assert repo.get_patch(patch_id)["status"] == "committed"
+
+
 def test_two_events_create_two_independent_patches_and_versions() -> None:
     with TemporaryDirectory() as directory:
         repo = Repository.from_url(f"sqlite+pysqlite:///{directory}/wiki.db", create_schema=True)

@@ -2,11 +2,19 @@
 {% block title %}Review queue · AIME Event Wiki{% endblock %}
 {% block content %}
 <h2>Pending patches</h2>
+<form method="post" action="/reviews/links/batch">
+<p><button name="decision" value="approve">批量批准所选低风险链接</button> <button class="danger" name="decision" value="reject">批量拒绝所选链接</button></p>
 {% for patch in patches %}
 <article class="card">
   <span class="badge {{ patch.audit.status if patch.audit else '' }}">{{ patch.audit.status if patch.audit else 'UNAUDITED' }}</span>
   <h3><a href="/reviews/{{ patch.patch_id }}">{{ patch.patch_id }}</a></h3>
+  {% if patch.payload.event_link %}
+  <p><label><input type="checkbox" name="patch_ids" value="{{ patch.patch_id }}"{% if patch.audit.disposition != 'batch_review' %} disabled{% endif %}> {{ patch.source_event.event_title or patch.payload.event_link.source_event_id }} → <strong>{{ patch.payload.event_link.link_type }}</strong> → {{ patch.target_event.event_title or patch.payload.event_link.target_event_id }}</label></p>
+  <p>{{ '推断关系' if patch.payload.event_link.inferred else '事实关系' }} · 置信度 {{ patch.payload.event_link.confidence }} · {{ patch.audit.disposition }}</p>
+  {% else %}
   <p>{{ patch.operation }}{% if patch.event_id %} · {{ patch.event_id }}{% endif %}</p>
+  {% endif %}
 </article>
 {% else %}<div class="card">No patches are waiting for review.</div>{% endfor %}
+</form>
 {% endblock %}

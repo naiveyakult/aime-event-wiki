@@ -256,9 +256,10 @@ def test_repair_pending_event_ids_updates_payload_edges_and_is_idempotent(
     assert repaired["event_id"] != "event_collision"
     assert repaired["payload"]["event"]["event_id"] == repaired["event_id"]
     assert repaired["payload"]["edges"][0]["source_node_id"] == repaired["event_id"]
-    assert repository.get_review_context("PATCH_1")["review_history"][0][
-        "decision"
-    ] == "repair_event_id"
+    assert (
+        repository.get_review_context("PATCH_1")["review_history"][0]["decision"]
+        == "repair_event_id"
+    )
 
     repeated = repository.repair_pending_event_ids(apply=True)
     assert repeated["changed"] == 0
