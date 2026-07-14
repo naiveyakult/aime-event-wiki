@@ -28,6 +28,10 @@ from event_wiki.models import (
 
 PROMPT_VERSION = "v1"
 PROMPT_ROOT = Path(__file__).resolve().parents[2] / "prompts"
+CLAIM_CHUNK_CHARS = 1_000
+CLAIM_CHUNK_OVERLAP = 100
+CLAIM_RETRY_MIN_CHARS = 500
+MAX_CLAIMS_PER_CHUNK = 3
 
 
 class EventProposalBatch(BaseModel):
@@ -39,7 +43,7 @@ class EventDecisionBatch(BaseModel):
 
 
 class ClaimBatch(BaseModel):
-    claims: list[Claim] = Field(default_factory=list)
+    claims: list[Claim] = Field(default_factory=list, max_length=MAX_CLAIMS_PER_CHUNK)
 
 
 class RelationBatch(BaseModel):
@@ -61,6 +65,63 @@ def _dump(value: Any) -> Any:
 
 def _normalized_text(value: str) -> str:
     return " ".join(value.lower().split())
+
+
+def _text_chunks(value: str, *, max_chars: int, overlap_chars: int) -> list[str]:
+    text = value.strip()
+    if not text or len(text) <= max_chars:
+        return [text]
+    chunks: list[str] = []
+    start = 0
+    while start < len(text):
+        hard_end = min(start + max_chars, len(text))
+        end = hard_end
+        if hard_end < len(text):
+            search_start = start + max_chars // 2
+            boundaries = [
+                text.rfind(marker, search_start, hard_end)
+                for marker in ("\n\n", ". ", "! ", "? ")
+            ]
+            boundary = max(boundaries)
+            if boundary >= search_start:
+                end = boundary + 1
+        chunk = text[start:end].strip()
+        if chunk:
+            chunks.append(chunk)
+        if end >= len(text):
+            break
+        start = max(start + 1, end - overlap_chars)
+    return chunks
+
+
+def _chunk_document(
+    document: EvidenceDocument,
+    *,
+    max_chars: int = CLAIM_CHUNK_CHARS,
+    overlap_chars: int = CLAIM_CHUNK_OVERLAP,
+) -> list[EvidenceDocument]:
+    return [
+        document.model_copy(update={"body": chunk})
+        for chunk in _text_chunks(
+            document.body,
+            max_chars=max_chars,
+            overlap_chars=min(overlap_chars, max_chars // 4),
+        )
+    ]
+
+
+def _is_retryable_truncation(error: BaseException) -> bool:
+    current: BaseException | None = error
+    while current is not None:
+        message = str(current).lower()
+        if (
+            "incomplete chunked read" in message
+            or "complete message body" in message
+            or "eof while parsing" in message
+        ):
+            return True
+        current = current.__cause__
+    return False
 
 
 def _prompt(name: str) -> str:
@@ -259,15 +320,13 @@ class AgentSuite:
     def extract_claims(
         self, proposal: EventProposal, evidence: list[EvidenceDocument]
     ) -> list[Claim]:
-        result = self.client.invoke(
-            task="extract_claims",
-            prompt=_prompt("claims"),
-            output_model=ClaimBatch,
-            context={"proposal": _dump(proposal), "evidence": _dump(evidence)},
-        )
+        extracted: list[Claim] = []
+        for document in evidence:
+            for chunk in _chunk_document(document):
+                extracted.extend(self._extract_claim_chunk(proposal, chunk))
         documents = {item.evidence_id: item for item in evidence}
-        claims: list[Claim] = []
-        for claim in result.claims:
+        claims: dict[str, Claim] = {}
+        for claim in extracted:
             if not set(claim.evidence_ids) <= set(documents):
                 continue
             quote = _normalized_text(claim.quote)
@@ -282,8 +341,56 @@ class AgentSuite:
             ]
             if not supporting_ids:
                 continue
-            claims.append(claim.model_copy(update={"evidence_ids": supporting_ids}))
-        return claims
+            claim_id = _stable_id(
+                "claim",
+                proposal.proposal_id,
+                claim.subject,
+                claim.predicate,
+                claim.object_value,
+                claim.quote,
+                *sorted(supporting_ids),
+            )
+            supported = claim.model_copy(
+                update={"claim_id": claim_id, "evidence_ids": supporting_ids}
+            )
+            previous = claims.get(claim_id)
+            if previous is None or supported.confidence > previous.confidence:
+                claims[claim_id] = supported
+        return list(claims.values())
+
+    def _extract_claim_chunk(
+        self, proposal: EventProposal, document: EvidenceDocument
+    ) -> list[Claim]:
+        try:
+            result = self.client.invoke(
+                task="extract_claims",
+                prompt=_prompt("claims"),
+                output_model=ClaimBatch,
+                context={
+                    "proposal": _dump(proposal),
+                    "evidence": _dump([document]),
+                    "max_claims": MAX_CLAIMS_PER_CHUNK,
+                },
+            )
+            return result.claims
+        except Exception as error:
+            if (
+                not _is_retryable_truncation(error)
+                or len(document.body) <= CLAIM_RETRY_MIN_CHARS
+            ):
+                raise
+            retry_chars = max(CLAIM_RETRY_MIN_CHARS, len(document.body) // 2)
+            retry_chunks = _chunk_document(
+                document,
+                max_chars=retry_chars,
+                overlap_chars=min(CLAIM_CHUNK_OVERLAP, retry_chars // 5),
+            )
+            if len(retry_chunks) <= 1:
+                raise
+            claims: list[Claim] = []
+            for chunk in retry_chunks:
+                claims.extend(self._extract_claim_chunk(proposal, chunk))
+            return claims
 
     def build_relations(
         self, proposal: EventProposal, evidence: list[EvidenceDocument]

@@ -1,5 +1,8 @@
 from datetime import UTC, datetime
 
+import httpx
+from openai import APIConnectionError
+
 from event_wiki.agents import AgentSuite, HeuristicStructuredClient
 from event_wiki.models import CandidateBundle, EventFamily, EvidenceDocument
 
@@ -126,6 +129,164 @@ def test_claim_evidence_is_rebound_to_documents_containing_the_quote() -> None:
     assert len(claims) == 1
     assert claims[0].evidence_ids == ["D2"]
     assert suite.audit(claims, [], evidence, NOW).issues == []
+
+
+def test_claim_extraction_chunks_long_evidence_and_preserves_provenance() -> None:
+    class RecordingClaimClient(HeuristicStructuredClient):
+        def __init__(self) -> None:
+            self.body_lengths: list[int] = []
+
+        def _extract_claims(self, context):  # noqa: ANN001
+            document = context["evidence"][0]
+            self.body_lengths.append(len(document["body"]))
+            quote = document["body"][:40].strip()
+            proposal = context["proposal"]
+            return {
+                "claims": [
+                    {
+                        "claim_id": f"CLAIM_{len(self.body_lengths)}",
+                        "subject": proposal["event_subject"],
+                        "predicate": "reported",
+                        "object_value": quote,
+                        "kind": "reported_claim",
+                        "event_time": proposal["event_time"],
+                        "known_at": proposal["known_at"],
+                        "evidence_ids": [document["evidence_id"]],
+                        "quote": quote,
+                        "confidence": 0.8,
+                    }
+                ]
+            }
+
+    body = " ".join(f"Sentence {index} contains a supported fact." for index in range(120))
+    evidence = [document("D1", "Example SEC earnings", body)]
+    client = RecordingClaimClient()
+    suite = AgentSuite(client)
+    candidate = CandidateBundle(
+        candidate_id="C1",
+        evidence_ids=["D1"],
+        window_start=NOW,
+        window_end=NOW,
+        symbols=["EXM"],
+        entity_names=["Example Corp"],
+    )
+    proposal = suite.discover(candidate, evidence)[0]
+
+    claims = suite.extract_claims(proposal, evidence)
+
+    assert len(client.body_lengths) > 1
+    assert max(client.body_lengths) <= 1_000
+    assert claims
+    assert all(claim.evidence_ids == ["D1"] for claim in claims)
+
+
+def test_claim_extraction_retries_incomplete_response_with_smaller_chunks() -> None:
+    class IncompleteReadClient(HeuristicStructuredClient):
+        def __init__(self) -> None:
+            self.body_lengths: list[int] = []
+
+        def _extract_claims(self, context):  # noqa: ANN001
+            document = context["evidence"][0]
+            body = document["body"]
+            self.body_lengths.append(len(body))
+            if len(body) > 700:
+                request = httpx.Request("POST", "https://api.example.test/chat/completions")
+                try:
+                    raise httpx.RemoteProtocolError(
+                        "peer closed connection without sending complete message body "
+                        "(incomplete chunked read)"
+                    )
+                except httpx.RemoteProtocolError as cause:
+                    raise APIConnectionError(request=request) from cause
+            proposal = context["proposal"]
+            quote = body[:40].strip()
+            return {
+                "claims": [
+                    {
+                        "claim_id": f"CLAIM_{len(self.body_lengths)}",
+                        "subject": proposal["event_subject"],
+                        "predicate": "reported",
+                        "object_value": quote,
+                        "kind": "reported_claim",
+                        "event_time": proposal["event_time"],
+                        "known_at": proposal["known_at"],
+                        "evidence_ids": [document["evidence_id"]],
+                        "quote": quote,
+                        "confidence": 0.8,
+                    }
+                ]
+            }
+
+    body = " ".join(f"Sentence {index} contains a supported fact." for index in range(32))
+    evidence = [document("D1", "Example SEC earnings", body)]
+    client = IncompleteReadClient()
+    suite = AgentSuite(client)
+    candidate = CandidateBundle(
+        candidate_id="C1",
+        evidence_ids=["D1"],
+        window_start=NOW,
+        window_end=NOW,
+        symbols=["EXM"],
+        entity_names=["Example Corp"],
+    )
+    proposal = suite.discover(candidate, evidence)[0]
+
+    claims = suite.extract_claims(proposal, evidence)
+
+    assert client.body_lengths[0] > 700
+    assert any(length <= 700 for length in client.body_lengths[1:])
+    assert claims
+
+
+def test_claim_extraction_retries_truncated_json_with_smaller_chunks() -> None:
+    class TruncatedJsonClient(HeuristicStructuredClient):
+        def __init__(self) -> None:
+            self.body_lengths: list[int] = []
+
+        def _extract_claims(self, context):  # noqa: ANN001
+            document = context["evidence"][0]
+            body = document["body"]
+            self.body_lengths.append(len(body))
+            if len(body) > 700:
+                raise ValueError("Invalid JSON: EOF while parsing a string")
+            proposal = context["proposal"]
+            quote = body[:40].strip()
+            return {
+                "claims": [
+                    {
+                        "claim_id": f"CLAIM_{len(self.body_lengths)}",
+                        "subject": proposal["event_subject"],
+                        "predicate": "reported",
+                        "object_value": quote,
+                        "kind": "reported_claim",
+                        "event_time": proposal["event_time"],
+                        "known_at": proposal["known_at"],
+                        "evidence_ids": [document["evidence_id"]],
+                        "quote": quote,
+                        "confidence": 0.8,
+                    }
+                ]
+            }
+
+    body = " ".join(f"Sentence {index} contains a supported fact." for index in range(24))
+    evidence = [document("D1", "Example SEC earnings", body)]
+    client = TruncatedJsonClient()
+    suite = AgentSuite(client)
+    candidate = CandidateBundle(
+        candidate_id="C1",
+        evidence_ids=["D1"],
+        window_start=NOW,
+        window_end=NOW,
+        symbols=["EXM"],
+        entity_names=["Example Corp"],
+    )
+    proposal = suite.discover(candidate, evidence)[0]
+
+    claims = suite.extract_claims(proposal, evidence)
+
+    assert client.body_lengths[0] > 700
+    assert any(length <= 700 for length in client.body_lengths[1:])
+    assert claims
 
 
 def test_relation_agent_merges_duplicate_relation_evidence() -> None:

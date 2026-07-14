@@ -8,6 +8,14 @@ from pydantic import BaseModel
 
 OutputT = TypeVar("OutputT", bound=BaseModel)
 
+TASK_MAX_TOKENS = {
+    "discover_event": 2_048,
+    "resolve_identity": 1_024,
+    "extract_claims": 4_096,
+    "build_relations": 2_048,
+}
+DEFAULT_MAX_TOKENS = 2_048
+
 
 class StructuredLLM(Protocol):
     """Small injectable boundary used by all event-wiki agents."""
@@ -55,6 +63,7 @@ class OpenAICompatibleStructuredClient:
         context: dict[str, Any],
     ) -> OutputT:
         schema = output_model.model_json_schema()
+        max_tokens = TASK_MAX_TOKENS.get(task, DEFAULT_MAX_TOKENS)
         messages = [
             {"role": "system", "content": prompt},
             {
@@ -71,6 +80,7 @@ class OpenAICompatibleStructuredClient:
                 model=self.model_version,
                 messages=[{"role": "system", "content": fallback_prompt}, messages[1]],
                 response_format={"type": "json_object"},
+                max_tokens=max_tokens,
             )
         else:
             try:
@@ -85,6 +95,7 @@ class OpenAICompatibleStructuredClient:
                             "schema": schema,
                         },
                     },
+                    max_tokens=max_tokens,
                 )
             except BadRequestError as exc:
                 detail = str(exc).lower()
@@ -98,6 +109,7 @@ class OpenAICompatibleStructuredClient:
                         messages[1],
                     ],
                     response_format={"type": "json_object"},
+                    max_tokens=max_tokens,
                 )
         content = response.choices[0].message.content
         if not content:
