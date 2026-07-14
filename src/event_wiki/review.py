@@ -30,7 +30,15 @@ def _pending(repository: Any) -> list[dict[str, Any]]:
         values = repository.list_pending_patches()
     else:
         values = repository.list_review_patches(status="pending")
-    return [_as_dict(value) for value in values]
+    patches = [_as_dict(value) for value in values]
+    getter = getattr(repository, "get_event", None)
+    if getter:
+        for patch in patches:
+            link = patch.get("payload", {}).get("event_link")
+            if link:
+                patch["source_event"] = getter(link.get("source_event_id"))
+                patch["target_event"] = getter(link.get("target_event_id"))
+    return patches
 
 
 def _get_patch(repository: Any, patch_id: str) -> dict[str, Any] | None:
@@ -154,6 +162,30 @@ def create_app(
             context={"patches": _pending(repository)},
         )
 
+    @app.post("/reviews/links/batch")
+    async def review_link_batch(request: Request):
+        form = await request.form()
+        patch_ids = [str(value) for value in form.getlist("patch_ids")]
+        decision = str(form.get("decision") or "")
+        if decision not in {"approve", "reject"} or not patch_ids:
+            raise HTTPException(status_code=400, detail="请选择链接及批准或拒绝操作")
+        try:
+            for patch_id in patch_ids:
+                patch = _get_patch(repository, patch_id)
+                if patch is None or patch.get("operation") not in {
+                    "add_event_link",
+                    "supplement_event_link",
+                }:
+                    raise ValueError(f"patch is not an event link: {patch_id}")
+                if decision == "approve":
+                    _review(repository, patch_id, "approve")
+                else:
+                    _reject(repository, patch_id, "批量审核拒绝")
+                await resume(patch_id, decision)
+        except ValueError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return RedirectResponse("/reviews", status_code=303)
+
     @app.get("/reviews/{patch_id}")
     async def review_detail(request: Request, patch_id: str):
         patch = _get_context(repository, patch_id)
@@ -170,6 +202,9 @@ def create_app(
                 ),
                 "review_history_json": json.dumps(
                     patch.get("review_history", []), indent=2, default=str
+                ),
+                "linked_events_json": json.dumps(
+                    patch.get("linked_events", {}), indent=2, default=str
                 ),
             },
         )

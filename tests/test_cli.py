@@ -16,6 +16,7 @@ def test_cli_help_lists_core_workflows() -> None:
         "serve",
         "export",
         "maintenance",
+        "link",
     ):
         assert command in result.stdout
 

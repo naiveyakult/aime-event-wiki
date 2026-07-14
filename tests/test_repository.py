@@ -256,9 +256,10 @@ def test_repair_pending_event_ids_updates_payload_edges_and_is_idempotent(
     assert repaired["event_id"] != "event_collision"
     assert repaired["payload"]["event"]["event_id"] == repaired["event_id"]
     assert repaired["payload"]["edges"][0]["source_node_id"] == repaired["event_id"]
-    assert repository.get_review_context("PATCH_1")["review_history"][0][
-        "decision"
-    ] == "repair_event_id"
+    assert (
+        repository.get_review_context("PATCH_1")["review_history"][0]["decision"]
+        == "repair_event_id"
+    )
 
     repeated = repository.repair_pending_event_ids(apply=True)
     assert repeated["changed"] == 0
@@ -363,6 +364,34 @@ def test_edited_payload_cannot_reference_existing_evidence_outside_patch(
 
     with pytest.raises(ValueError, match="validation failed"):
         repository.review_patch("PATCH_1", "approve", edited_payload=payload)
+
+
+def test_valid_edit_replaces_prior_block_audit(repository: Repository) -> None:
+    repository.upsert_evidence(evidence())
+    blocked = patch().model_copy(update={"audit": AuditResult(status=AuditStatus.BLOCK)})
+    repository.create_patch(blocked)
+
+    reviewed = repository.review_patch(
+        "PATCH_1", "approve", edited_payload=patch().payload, reviewer="editor"
+    )
+
+    assert reviewed["status"] == "approved"
+    assert reviewed["audit"]["status"] == "PASS"
+
+
+def test_duplicate_knowledge_ids_are_committed_idempotently(repository: Repository) -> None:
+    repository.upsert_evidence(evidence())
+    original = patch()
+    duplicate_edges = [original.payload["edges"][0], original.payload["edges"][0]]
+    repository.create_patch(
+        original.model_copy(update={"payload": {**original.payload, "edges": duplicate_edges}})
+    )
+    repository.review_patch("PATCH_1", "approve")
+
+    repository.commit_approved_patch("PATCH_1")
+
+    snapshot = repository.graph_snapshot(NOW)
+    assert [edge["edge_id"] for edge in snapshot["edges"]] == ["EDGE_PATCH_1"]
 
 
 def test_event_version_and_unsupported_operations_fail_closed(repository: Repository) -> None:

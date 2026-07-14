@@ -13,6 +13,7 @@ TASK_MAX_TOKENS = {
     "resolve_identity": 1_024,
     "extract_claims": 4_096,
     "build_relations": 2_048,
+    "link_events": 2_048,
 }
 DEFAULT_MAX_TOKENS = 2_048
 

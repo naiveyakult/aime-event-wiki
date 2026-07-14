@@ -45,6 +45,17 @@ class RelationType(StrEnum):
     POLICY_EXPOSURE = "policy_exposure"
 
 
+class EventLinkType(StrEnum):
+    CAUSES = "causes"
+    CONTRIBUTES_TO = "contributes_to"
+    COUNTERACTS = "counteracts"
+    AMPLIFIES = "amplifies"
+    CONTRADICTS = "contradicts"
+    SAME_DRIVER = "same_driver"
+    EVIDENCE_UPDATE = "evidence_update"
+    TEMPORAL_SEQUENCE = "temporal_sequence"
+
+
 class AuditStatus(StrEnum):
     PASS = "PASS"
     WARN = "WARN"
@@ -58,6 +69,8 @@ class WikiOperation(StrEnum):
     ADD_RELATION = "add_relation"
     MERGE_EVENT = "merge_event"
     UPDATE_METADATA = "update_metadata"
+    ADD_EVENT_LINK = "add_event_link"
+    SUPPLEMENT_EVENT_LINK = "supplement_event_link"
 
 
 def _aware(value: datetime) -> datetime:
@@ -173,6 +186,39 @@ class Relation(StrictModel):
     _known_aware = field_validator("known_at")(_aware)
 
 
+class EvidenceQuote(StrictModel):
+    evidence_id: str = Field(min_length=1)
+    quote: str = Field(min_length=1)
+
+
+class EventLink(StrictModel):
+    link_id: str = Field(min_length=1)
+    source_event_id: str = Field(min_length=1)
+    target_event_id: str = Field(min_length=1)
+    link_type: EventLinkType
+    inferred: bool
+    confidence: float = Field(ge=0, le=1)
+    rationale: str = Field(min_length=1)
+    evidence_quotes: list[EvidenceQuote] = Field(min_length=1)
+    known_at: datetime
+    valid_from: datetime | None = None
+
+    _known_aware = field_validator("known_at")(_aware)
+    _valid_aware = field_validator("valid_from")(
+        lambda value: _aware(value) if value is not None else value
+    )
+
+    @model_validator(mode="after")
+    def endpoints_are_distinct(self) -> EventLink:
+        if self.source_event_id == self.target_event_id:
+            raise ValueError("event links cannot reference the same event twice")
+        return self
+
+
+class EventLinkBatch(StrictModel):
+    links: list[EventLink] = Field(default_factory=list)
+
+
 class AuditIssue(StrictModel):
     code: str = Field(min_length=1)
     message: str = Field(min_length=1)
@@ -184,6 +230,12 @@ class AuditIssue(StrictModel):
 class AuditResult(StrictModel):
     status: AuditStatus
     issues: list[AuditIssue] = Field(default_factory=list)
+
+
+class EventLinkAuditResult(AuditResult):
+    disposition: Literal[
+        "auto_commit", "batch_review", "individual_review", "suppressed", "blocked"
+    ]
 
 
 class EventMetadata(StrictModel):
@@ -232,10 +284,11 @@ class WikiPatch(StrictModel):
     thread_id: str = Field(min_length=1)
     operation: WikiOperation
     event_id: str | None = None
+    link_id: str | None = None
     base_version: int = Field(ge=0)
     evidence_ids: list[str] = Field(min_length=1)
     payload: dict[str, Any]
-    audit: AuditResult
+    audit: AuditResult | EventLinkAuditResult
     model_version: str = Field(min_length=1)
     prompt_version: str = Field(min_length=1)
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))

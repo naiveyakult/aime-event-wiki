@@ -42,8 +42,7 @@ def _canonical_number(value: str, scale: str | None) -> str:
 
 def _numbers(value: str) -> set[str]:
     return {
-        _canonical_number(number, scale or None)
-        for number, scale in _NUMBER_PATTERN.findall(value)
+        _canonical_number(number, scale or None) for number, scale in _NUMBER_PATTERN.findall(value)
     }
 
 

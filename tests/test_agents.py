@@ -369,9 +369,7 @@ def test_claim_extraction_retries_a_failed_minimum_chunk_once() -> None:
                 raise ValueError("Invalid JSON: EOF while parsing a string")
             return super()._extract_claims(context)
 
-    evidence = [
-        document("D1", "Example SEC earnings", "Example reported revenue of $10 million.")
-    ]
+    evidence = [document("D1", "Example SEC earnings", "Example reported revenue of $10 million.")]
     client = FlakyMinimumChunkClient()
     suite = AgentSuite(client)
     candidate = CandidateBundle(

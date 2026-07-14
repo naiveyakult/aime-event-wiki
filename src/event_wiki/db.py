@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
@@ -31,6 +32,8 @@ from event_wiki.models import (
     AuditStatus,
     CandidateBundle,
     EventFamily,
+    EventLink,
+    EventLinkAuditResult,
     EventProposal,
     EvidenceDocument,
     PatchPayload,
@@ -183,6 +186,18 @@ class EventEdgeRow(Base):
     version: Mapped[int] = mapped_column(Integer)
 
 
+class EventLinkRow(Base):
+    __tablename__ = "event_links"
+
+    link_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    source_event_id: Mapped[str] = mapped_column(ForeignKey("events.event_id"), index=True)
+    target_event_id: Mapped[str] = mapped_column(ForeignKey("events.event_id"), index=True)
+    link_type: Mapped[str] = mapped_column(String(64), index=True)
+    current_version: Mapped[int] = mapped_column(Integer, default=0)
+    status: Mapped[str] = mapped_column(String(32), default="active", index=True)
+    snapshot: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+
+
 class WikiPatchRow(Base):
     __tablename__ = "wiki_patches"
 
@@ -190,6 +205,7 @@ class WikiPatchRow(Base):
     thread_id: Mapped[str] = mapped_column(String(255), index=True)
     operation: Mapped[str] = mapped_column(String(64), index=True)
     event_id: Mapped[str | None] = mapped_column(String(255), index=True)
+    link_id: Mapped[str | None] = mapped_column(String(255), index=True)
     base_version: Mapped[int] = mapped_column(Integer)
     evidence_ids: Mapped[list[str]] = mapped_column(JSON)
     payload: Mapped[dict[str, Any]] = mapped_column(JSON)
@@ -207,6 +223,19 @@ class WikiVersionRow(Base):
 
     version_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     event_id: Mapped[str] = mapped_column(ForeignKey("events.event_id"), index=True)
+    version: Mapped[int] = mapped_column(Integer)
+    patch_id: Mapped[str] = mapped_column(ForeignKey("wiki_patches.patch_id"), unique=True)
+    known_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    snapshot: Mapped[dict[str, Any]] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class EventLinkVersionRow(Base):
+    __tablename__ = "event_link_versions"
+    __table_args__ = (UniqueConstraint("link_id", "version", name="uq_event_link_version"),)
+
+    version_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    link_id: Mapped[str] = mapped_column(ForeignKey("event_links.link_id"), index=True)
     version: Mapped[int] = mapped_column(Integer)
     patch_id: Mapped[str] = mapped_column(ForeignKey("wiki_patches.patch_id"), unique=True)
     known_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
@@ -445,6 +474,77 @@ class Repository:
                 raise KeyError(event_id)
             return int(version)
 
+    def get_event(self, event_id: str) -> dict[str, Any] | None:
+        with self.session() as session:
+            row = session.get(EventRow, event_id)
+            return self._event_context(row) if row else None
+
+    def list_events(self, *, limit: int | None = None) -> list[dict[str, Any]]:
+        statement = (
+            select(EventRow)
+            .where(EventRow.status == "active")
+            .order_by(EventRow.event_time, EventRow.event_id)
+        )
+        if limit is not None:
+            statement = statement.limit(limit)
+        with self.session() as session:
+            return [self._event_context(row) for row in session.scalars(statement)]
+
+    def get_event_link(self, link_id: str) -> dict[str, Any] | None:
+        with self.session() as session:
+            row = session.get(EventLinkRow, link_id)
+            if row is None:
+                return None
+            return {
+                "link_id": row.link_id,
+                "source_event_id": row.source_event_id,
+                "target_event_id": row.target_event_id,
+                "link_type": row.link_type,
+                "current_version": row.current_version,
+                "status": row.status,
+                "snapshot": row.snapshot,
+            }
+
+    def find_link_candidates(
+        self, event_id: str, *, window_days: int = 30, limit: int = 20
+    ) -> list[dict[str, Any]]:
+        source = self.get_event(event_id)
+        if source is None:
+            raise KeyError(event_id)
+        around = _utc(source["event_time"])
+        statement = select(EventRow).where(
+            EventRow.event_id != event_id,
+            EventRow.status == "active",
+            EventRow.event_time >= around - timedelta(days=window_days),
+            EventRow.event_time <= around + timedelta(days=window_days),
+        )
+        with self.session() as session:
+            candidates = [self._event_context(row) for row in session.scalars(statement)]
+
+        def tokens(value: dict[str, Any]) -> set[str]:
+            event = value.get("snapshot", {}).get("event", {})
+            text = " ".join(
+                [
+                    str(value.get("event_subject", "")),
+                    str(value.get("event_title", "")),
+                    *event.get("primary_symbols", []),
+                    *(
+                        str(item.get("object_value", ""))
+                        for item in value.get("snapshot", {}).get("claims", [])
+                    ),
+                ]
+            )
+            return {item for item in re.findall(r"[a-z0-9]+", text.lower()) if len(item) >= 3}
+
+        source_tokens = tokens(source)
+        scored = []
+        for candidate in candidates:
+            overlap = source_tokens & tokens(candidate)
+            if overlap:
+                scored.append((len(overlap), candidate))
+        scored.sort(key=lambda item: (-item[0], item[1]["event_time"], item[1]["event_id"]))
+        return [item for _, item in scored[:limit]]
+
     def create_patch(self, patch: WikiPatch) -> None:
         with self.session() as session:
             if session.get(WikiPatchRow, patch.patch_id):
@@ -519,13 +619,15 @@ class Repository:
                 edges = []
                 for raw_edge in payload.get("edges") or []:
                     edge = dict(raw_edge)
-                    if edge.get("source_node_kind") == "event" and edge.get(
-                        "source_node_id"
-                    ) == old:
+                    if (
+                        edge.get("source_node_kind") == "event"
+                        and edge.get("source_node_id") == old
+                    ):
                         edge["source_node_id"] = expected
-                    if edge.get("target_node_kind") == "event" and edge.get(
-                        "target_node_id"
-                    ) == old:
+                    if (
+                        edge.get("target_node_kind") == "event"
+                        and edge.get("target_node_id") == old
+                    ):
                         edge["target_node_id"] = expected
                     edges.append(edge)
                 payload.update(
@@ -591,7 +693,19 @@ class Repository:
                     }
                     for row in reviews
                 ],
+                "linked_events": self._linked_event_context(session, patch),
             }
+
+    def _linked_event_context(self, session: Session, patch: WikiPatchRow) -> dict[str, Any]:
+        link = (patch.payload or {}).get("event_link")
+        if not link:
+            return {}
+        source = session.get(EventRow, link.get("source_event_id"))
+        target = session.get(EventRow, link.get("target_event_id"))
+        return {
+            "source": self._event_context(source) if source else None,
+            "target": self._event_context(target) if target else None,
+        }
 
     def reset_patch_for_rerun(self, patch_id: str, reviewer: str = "web") -> dict[str, Any]:
         with self.session() as session:
@@ -634,15 +748,26 @@ class Repository:
                 raise ValueError(f"patch is not pending: {row.status}")
             if edited_payload is not None:
                 row.payload = _json(edited_payload)
+                row.audit = AuditResult(status=AuditStatus.PASS).model_dump(mode="json")
             if normalized == "approve":
                 if not self._operation_supported(row.operation):
                     validation_error = f"operation {row.operation} is not supported for commit"
                 else:
-                    parsed, audit = self._validate_payload(session, row)
+                    if row.operation in {
+                        WikiOperation.ADD_EVENT_LINK,
+                        WikiOperation.SUPPLEMENT_EVENT_LINK,
+                    }:
+                        parsed, audit = self._validate_event_link_payload(session, row)
+                    else:
+                        parsed, audit = self._validate_payload(session, row)
                     row.audit = audit.model_dump(mode="json")
                     if parsed is not None:
-                        row.payload = parsed.model_dump(
-                            mode="json", exclude={"schema_version"}, exclude_none=True
+                        row.payload = (
+                            {"event_link": parsed.model_dump(mode="json")}
+                            if isinstance(parsed, EventLink)
+                            else parsed.model_dump(
+                                mode="json", exclude={"schema_version"}, exclude_none=True
+                            )
                         )
                     if audit.status == AuditStatus.BLOCK:
                         validation_error = "patch validation failed with BLOCK audit"
@@ -683,6 +808,11 @@ class Repository:
                 raise ValueError(f"operation {patch.operation} is not supported for commit")
             if patch.status != "approved":
                 raise ValueError(f"patch is not approved: {patch.status}")
+            if patch.operation in {
+                WikiOperation.ADD_EVENT_LINK,
+                WikiOperation.SUPPLEMENT_EVENT_LINK,
+            }:
+                return self._commit_approved_event_link(session, patch)
             parsed, audit = self._validate_payload(session, patch)
             if parsed is None or audit.status == AuditStatus.BLOCK:
                 raise ValueError("patch validation failed with BLOCK audit")
@@ -742,7 +872,85 @@ class Repository:
             WikiOperation.UPDATE_METADATA,
             WikiOperation.APPEND_CLAIM,
             WikiOperation.ADD_RELATION,
+            WikiOperation.ADD_EVENT_LINK,
+            WikiOperation.SUPPLEMENT_EVENT_LINK,
         }
+
+    def _validate_event_link_payload(
+        self, session: Session, patch: WikiPatchRow
+    ) -> tuple[EventLink | None, EventLinkAuditResult]:
+        from event_wiki.event_links import audit_event_link
+
+        try:
+            link = EventLink.model_validate((patch.payload or {}).get("event_link"))
+        except PydanticValidationError as exc:
+            return None, EventLinkAuditResult(
+                status=AuditStatus.BLOCK,
+                disposition="blocked",
+                issues=[
+                    AuditIssue(
+                        code="invalid_event_link_payload",
+                        message=str(exc),
+                        severity="block",
+                        field_ref="payload.event_link",
+                    )
+                ],
+            )
+        source = session.get(EventRow, link.source_event_id)
+        target = session.get(EventRow, link.target_event_id)
+        evidence_ids = {item.evidence_id for item in link.evidence_quotes}
+        documents = {
+            row.evidence_id: self._evidence_model(row)
+            for row in session.scalars(
+                select(EvidenceRow).where(EvidenceRow.evidence_id.in_(evidence_ids))
+            )
+        }
+        result = audit_event_link(
+            link,
+            self._event_context(source) if source else None,
+            self._event_context(target) if target else None,
+            documents,
+        )
+        return link, result
+
+    def _commit_approved_event_link(self, session: Session, patch: WikiPatchRow) -> int:
+        link, audit = self._validate_event_link_payload(session, patch)
+        if link is None or audit.status == AuditStatus.BLOCK:
+            raise ValueError("event link validation failed with BLOCK audit")
+        row = session.get(EventLinkRow, link.link_id)
+        if row is None:
+            row = EventLinkRow(
+                link_id=link.link_id,
+                source_event_id=link.source_event_id,
+                target_event_id=link.target_event_id,
+                link_type=str(link.link_type),
+                current_version=0,
+                snapshot={},
+            )
+            session.add(row)
+            session.flush()
+        if row.current_version != patch.base_version:
+            raise VersionConflict(
+                f"event link {link.link_id} is at version {row.current_version}, "
+                f"expected {patch.base_version}"
+            )
+        version = row.current_version + 1
+        snapshot = link.model_dump(mode="json")
+        row.current_version = version
+        row.snapshot = snapshot
+        session.add(
+            EventLinkVersionRow(
+                link_id=link.link_id,
+                version=version,
+                patch_id=patch.patch_id,
+                known_at=link.known_at,
+                snapshot=snapshot,
+                created_at=datetime.now(UTC),
+            )
+        )
+        patch.audit = audit.model_dump(mode="json")
+        patch.status = "committed"
+        return version
 
     def _validate_payload(
         self, session: Session, patch: WikiPatchRow
@@ -1008,6 +1216,24 @@ class Repository:
                 if edge_ids
                 else []
             )
+            visible_link_versions = (
+                select(
+                    EventLinkVersionRow.link_id,
+                    func.max(EventLinkVersionRow.version).label("latest_version"),
+                )
+                .where(EventLinkVersionRow.known_at <= cutoff)
+                .group_by(EventLinkVersionRow.link_id)
+                .subquery()
+            )
+            link_versions = list(
+                session.scalars(
+                    select(EventLinkVersionRow).join(
+                        visible_link_versions,
+                        (EventLinkVersionRow.link_id == visible_link_versions.c.link_id)
+                        & (EventLinkVersionRow.version == visible_link_versions.c.latest_version),
+                    )
+                )
+            )
         nodes: dict[tuple[str, str], dict[str, Any]] = {}
         visible_events: set[str] = set()
         for version in versions:
@@ -1047,6 +1273,33 @@ class Repository:
                     "version": edge.version,
                 }
             )
+        for version in link_versions:
+            link = version.snapshot
+            source_id = str(link.get("source_event_id", ""))
+            target_id = str(link.get("target_event_id", ""))
+            if source_id not in visible_events or target_id not in visible_events:
+                continue
+            output_edges.append(
+                {
+                    "edge_id": version.link_id,
+                    "event_id": source_id,
+                    "source_node_kind": "event",
+                    "source_node_id": source_id,
+                    "target_node_kind": "event",
+                    "target_node_id": target_id,
+                    "relation_type": link.get("link_type"),
+                    "known_at": _utc(version.known_at),
+                    "valid_from": _utc(link.get("valid_from")),
+                    "evidence_ids": sorted(
+                        {
+                            item.get("evidence_id")
+                            for item in link.get("evidence_quotes", [])
+                            if item.get("evidence_id")
+                        }
+                    ),
+                    "version": version.version,
+                }
+            )
         return {
             "nodes": sorted(nodes.values(), key=lambda item: (item["node_kind"], item["node_id"])),
             "edges": sorted(output_edges, key=lambda item: item["edge_id"]),
@@ -1068,6 +1321,39 @@ class Repository:
             ):
                 counts[f"patches_{status}"] = count
             return counts
+
+    def save_agent_run(
+        self,
+        run_id: str,
+        *,
+        thread_id: str,
+        status: str,
+        current_node: str | None = None,
+        metrics: dict[str, Any] | None = None,
+        error: str | None = None,
+    ) -> None:
+        now = datetime.now(UTC)
+        with self.session() as session:
+            row = session.get(AgentRunRow, run_id)
+            if row is None:
+                row = AgentRunRow(
+                    run_id=run_id,
+                    thread_id=thread_id,
+                    candidate_id=None,
+                    status=status,
+                    current_node=current_node,
+                    started_at=now,
+                    finished_at=now if status in {"completed", "failed"} else None,
+                    error=error,
+                    metrics=metrics or {},
+                )
+                session.add(row)
+            else:
+                row.status = status
+                row.current_node = current_node
+                row.finished_at = now if status in {"completed", "failed"} else None
+                row.error = error
+                row.metrics = metrics or row.metrics
 
     def audit_metrics(self) -> dict[str, Any]:
         with self.session() as session:
@@ -1131,7 +1417,12 @@ class Repository:
                 setattr(event, key, _utc(data[key]))
 
     def _insert_claims(self, session: Session, event_id: str, claims: list[dict[str, Any]]) -> None:
+        seen: set[str] = set()
         for data in claims:
+            claim_id = str(data["claim_id"])
+            if claim_id in seen or session.get(ClaimRow, claim_id) is not None:
+                continue
+            seen.add(claim_id)
             missing = self._missing_evidence(session, data.get("evidence_ids", []))
             if missing:
                 raise ValueError(f"unknown claim evidence IDs: {sorted(missing)}")
@@ -1145,7 +1436,12 @@ class Repository:
     def _insert_relations(
         self, session: Session, event_id: str, relations: list[dict[str, Any]]
     ) -> None:
+        seen: set[str] = set()
         for data in relations:
+            relation_id = str(data["relation_id"])
+            if relation_id in seen or session.get(RelationRow, relation_id) is not None:
+                continue
+            seen.add(relation_id)
             missing = self._missing_evidence(session, data.get("evidence_ids", []))
             if missing:
                 raise ValueError(f"unknown relation evidence IDs: {sorted(missing)}")
@@ -1163,7 +1459,12 @@ class Repository:
         version: int,
         edges: list[dict[str, Any]],
     ) -> None:
+        seen: set[str] = set()
         for data in edges:
+            edge_id = str(data["edge_id"])
+            if edge_id in seen or session.get(EventEdgeRow, edge_id) is not None:
+                continue
+            seen.add(edge_id)
             missing = self._missing_evidence(session, data.get("evidence_ids", []))
             if missing:
                 raise ValueError(f"unknown edge evidence IDs: {sorted(missing)}")
@@ -1207,12 +1508,23 @@ class Repository:
         }
 
     @staticmethod
+    def _event_context(row: EventRow) -> dict[str, Any]:
+        value = Repository._event_dict(row)
+        metadata = (row.snapshot or {}).get("event", {})
+        value.update(metadata)
+        value["event_id"] = row.event_id
+        value["event_time"] = _utc(row.event_time)
+        value["known_at"] = _utc(row.known_at)
+        return value
+
+    @staticmethod
     def _patch_dict(row: WikiPatchRow) -> dict[str, Any]:
         return {
             "patch_id": row.patch_id,
             "thread_id": row.thread_id,
             "operation": row.operation,
             "event_id": row.event_id,
+            "link_id": row.link_id,
             "base_version": row.base_version,
             "evidence_ids": row.evidence_ids,
             "payload": row.payload,

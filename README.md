@@ -22,6 +22,7 @@ docker compose up -d postgres
 event-wiki ingest --month 2025-11
 event-wiki candidates
 event-wiki run --limit 20
+event-wiki link --all --limit 20
 event-wiki serve
 ```
 
@@ -57,4 +58,4 @@ event-wiki security-scan
 
 ## 当前状态
 
-仓库已实现本地 MVP，每个 Wiki Patch 都必须经过人工批准。项目暂不附带开源许可证；在未来添加许可证之前，保留全部权利。
+仓库已实现本地 MVP。事件 Patch 和推断型 Event Link Patch 必须经过人工批准；严格共享证据事实边可以按确定性策略自动提交。项目暂不附带开源许可证；在未来添加许可证之前，保留全部权利。

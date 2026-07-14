@@ -77,9 +77,7 @@ def test_audit_treats_scaled_and_expanded_numbers_as_equivalent() -> None:
 
 
 def test_audit_normalizes_decimal_financial_scales() -> None:
-    document = evidence().model_copy(
-        update={"body": "Example reported assets of $1.5 billion."}
-    )
+    document = evidence().model_copy(update={"body": "Example reported assets of $1.5 billion."})
     scaled = claim(EVENT_TIME, "assets of $1.5 billion").model_copy(
         update={"predicate": "reported_assets", "object_value": "$1,500,000,000"}
     )

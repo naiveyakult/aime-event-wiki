@@ -121,6 +121,29 @@ def status() -> None:
     typer.echo(json.dumps(_repository().status_counts(), ensure_ascii=False, indent=2))
 
 
+@app.command("link")
+def link_events(
+    event_id: str | None = typer.Option(None, "--event-id"),
+    all_events: bool = typer.Option(False, "--all"),
+    limit: int = typer.Option(20, min=1),
+    offline: bool = typer.Option(False),
+) -> None:
+    """为已提交事件生成跨事件链接。"""
+    if bool(event_id) == all_events:
+        raise typer.BadParameter("必须且只能指定 --event-id 或 --all")
+    from event_wiki.link_graph import EventLinkRunner
+
+    repository = _repository()
+    runner = EventLinkRunner.from_settings(repository, offline=offline)
+    event_ids = (
+        [event_id]
+        if event_id
+        else [item["event_id"] for item in repository.list_events(limit=limit)]
+    )
+    results = [runner.run(value) for value in event_ids]
+    typer.echo(json.dumps(results, ensure_ascii=False, default=str, indent=2))
+
+
 @maintenance_app.command("repair-event-ids")
 def repair_event_ids(
     dry_run: bool = typer.Option(True, "--dry-run/--apply", help="默认只预览修复"),
