@@ -12,7 +12,9 @@ from event_wiki.security import scan_public_tree
 
 app = typer.Typer(no_args_is_help=True, help="AIME evidence-first Event Wiki")
 export_app = typer.Typer(no_args_is_help=True, help="Export approved Wiki knowledge")
+maintenance_app = typer.Typer(no_args_is_help=True, help="本地维护与确定性修复")
 app.add_typer(export_app, name="export")
+app.add_typer(maintenance_app, name="maintenance")
 
 
 def _repository():
@@ -117,6 +119,19 @@ def resume(
 @app.command()
 def status() -> None:
     typer.echo(json.dumps(_repository().status_counts(), ensure_ascii=False, indent=2))
+
+
+@maintenance_app.command("repair-event-ids")
+def repair_event_ids(
+    dry_run: bool = typer.Option(True, "--dry-run/--apply", help="默认只预览修复"),
+) -> None:
+    """确定性修复尚未提交的创建事件 Patch ID 引用。"""
+    repository = _repository()
+    try:
+        report = repository.repair_pending_event_ids(apply=not dry_run)
+    finally:
+        repository.close()
+    typer.echo(json.dumps(report, ensure_ascii=False, indent=2))
 
 
 @app.command()

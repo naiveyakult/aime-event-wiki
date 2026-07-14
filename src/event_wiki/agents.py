@@ -55,6 +55,38 @@ def _stable_id(prefix: str, *parts: str) -> str:
     return f"{prefix}_{hashlib.sha256(value).hexdigest()[:20]}"
 
 
+def _proposal_identity_parts(proposal: EventProposal) -> tuple[str, ...]:
+    return (
+        proposal.candidate_id,
+        str(proposal.event_family),
+        _normalized_text(proposal.event_subject),
+        _normalized_text(proposal.event_title),
+        proposal.event_time.astimezone(UTC).isoformat(),
+        *sorted(proposal.evidence_ids),
+    )
+
+
+def canonical_event_id(proposal: EventProposal) -> str:
+    """Build an event identity from validated content, never from an LLM-supplied ID."""
+    return _stable_id("event", *_proposal_identity_parts(proposal))
+
+
+def canonicalize_proposals(
+    candidate_id: str, proposals: list[EventProposal]
+) -> list[EventProposal]:
+    unique: dict[tuple[str, ...], EventProposal] = {}
+    for proposal in proposals:
+        normalized = proposal.model_copy(update={"candidate_id": candidate_id})
+        identity = _proposal_identity_parts(normalized)
+        unique.setdefault(identity, normalized)
+    return [
+        proposal.model_copy(
+            update={"proposal_id": _stable_id("proposal", *identity)}
+        )
+        for identity, proposal in sorted(unique.items())
+    ]
+
+
 def _dump(value: Any) -> Any:
     if isinstance(value, BaseModel):
         return value.model_dump(mode="json")
@@ -288,7 +320,12 @@ class AgentSuite:
             context={"candidate": _dump(candidate), "evidence": _dump(evidence)},
         )
         allowed = set(candidate.evidence_ids)
-        return [proposal for proposal in result.proposals if set(proposal.evidence_ids) <= allowed]
+        valid = [
+            proposal
+            for proposal in result.proposals
+            if set(proposal.evidence_ids) <= allowed
+        ]
+        return canonicalize_proposals(candidate.candidate_id, valid)
 
     def resolve(self, proposals: list[EventProposal], repository: Any) -> list[EventDecision]:
         existing: list[Any] = []
@@ -581,10 +618,10 @@ class AgentSuite:
         elif decision.decision == DecisionType.SUPPLEMENT:
             operation = WikiOperation.UPDATE_METADATA
         created_at = datetime.now(UTC)
+        event_id = decision.existing_event_id or canonical_event_id(proposal)
         patch_id = _stable_id(
-            "patch", thread_id, proposal.proposal_id, *evidence_ids, str(base_version)
+            "patch", thread_id, event_id, *evidence_ids, str(base_version)
         )
-        event_id = decision.existing_event_id or _stable_id("event", proposal.proposal_id)
         claim_payload = [
             item.model_dump(mode="json", exclude={"schema_version"}) for item in claims
         ]

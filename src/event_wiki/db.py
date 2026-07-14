@@ -31,6 +31,7 @@ from event_wiki.models import (
     AuditStatus,
     CandidateBundle,
     EventFamily,
+    EventProposal,
     EvidenceDocument,
     PatchPayload,
     WikiOperation,
@@ -58,6 +59,10 @@ def _json(value: Any) -> Any:
     if isinstance(value, (list, tuple)):
         return [_json(item) for item in value]
     return value
+
+
+def _normalized_identity(value: str) -> str:
+    return " ".join(value.lower().split())
 
 
 class RepositoryError(RuntimeError):
@@ -471,6 +476,85 @@ class Repository:
     def list_pending_patches(self) -> list[dict[str, Any]]:
         return self.list_patches(status="pending")
 
+    def repair_pending_event_ids(self, *, apply: bool = False) -> dict[str, Any]:
+        """Re-key uncommitted create-event patches without changing their patch IDs."""
+        from event_wiki.agents import canonical_event_id, canonicalize_proposals
+
+        statement = (
+            select(WikiPatchRow)
+            .where(
+                WikiPatchRow.operation == WikiOperation.CREATE_EVENT,
+                WikiPatchRow.status.in_(("pending", "approved", "rerun_requested")),
+            )
+            .order_by(WikiPatchRow.patch_id)
+        )
+        changes: list[dict[str, str]] = []
+        skipped: list[dict[str, str]] = []
+        with self.session() as session:
+            for row in session.scalars(statement):
+                raw_proposals = (row.payload or {}).get("proposals") or []
+                if len(raw_proposals) != 1:
+                    skipped.append(
+                        {"patch_id": row.patch_id, "reason": "requires_exactly_one_proposal"}
+                    )
+                    continue
+                try:
+                    proposal = EventProposal.model_validate(raw_proposals[0])
+                except PydanticValidationError:
+                    skipped.append({"patch_id": row.patch_id, "reason": "invalid_proposal"})
+                    continue
+                canonical = canonicalize_proposals(proposal.candidate_id, [proposal])[0]
+                expected = canonical_event_id(canonical)
+                old = row.event_id or str((row.payload or {}).get("event", {}).get("event_id", ""))
+                if old == expected:
+                    continue
+                changes.append(
+                    {"patch_id": row.patch_id, "old_event_id": old, "new_event_id": expected}
+                )
+                if not apply:
+                    continue
+                payload = dict(row.payload or {})
+                event = dict(payload.get("event") or {})
+                event["event_id"] = expected
+                edges = []
+                for raw_edge in payload.get("edges") or []:
+                    edge = dict(raw_edge)
+                    if edge.get("source_node_kind") == "event" and edge.get(
+                        "source_node_id"
+                    ) == old:
+                        edge["source_node_id"] = expected
+                    if edge.get("target_node_kind") == "event" and edge.get(
+                        "target_node_id"
+                    ) == old:
+                        edge["target_node_id"] = expected
+                    edges.append(edge)
+                payload.update(
+                    event=event,
+                    proposals=[canonical.model_dump(mode="json")],
+                    edges=edges,
+                )
+                row.event_id = expected
+                row.payload = payload
+                if row.status == "approved":
+                    row.status = "pending"
+                session.add(
+                    ReviewActionRow(
+                        patch_id=row.patch_id,
+                        decision="repair_event_id",
+                        reviewer="maintenance",
+                        reason=f"deterministic event ID repair: {old} -> {expected}",
+                        edited_payload=None,
+                        created_at=datetime.now(UTC),
+                    )
+                )
+        return {
+            "dry_run": not apply,
+            "scanned": len(changes) + len(skipped),
+            "changed": len(changes),
+            "changes": changes,
+            "skipped": skipped,
+        }
+
     def get_review_context(self, patch_id: str) -> dict[str, Any]:
         with self.session() as session:
             patch = session.get(WikiPatchRow, patch_id)
@@ -676,6 +760,58 @@ class Repository:
                 )
             )
             return None, AuditResult(status=AuditStatus.BLOCK, issues=issues)
+
+        if patch.operation == WikiOperation.CREATE_EVENT and len(payload.proposals) == 1:
+            from event_wiki.agents import canonical_event_id, canonicalize_proposals
+
+            proposal = canonicalize_proposals(
+                payload.proposals[0].candidate_id, [payload.proposals[0]]
+            )[0]
+            expected_event_id = canonical_event_id(proposal)
+            supplied_ids = {value for value in (patch.event_id, payload.event.event_id) if value}
+            if supplied_ids != {expected_event_id}:
+                issues.append(
+                    AuditIssue(
+                        code="noncanonical_event_id",
+                        message="Create-event patch does not use its deterministic event ID",
+                        severity="block",
+                        field_ref="payload.event.event_id",
+                    )
+                )
+            collisions = list(
+                session.scalars(
+                    select(WikiPatchRow).where(
+                        WikiPatchRow.patch_id != patch.patch_id,
+                        WikiPatchRow.event_id == expected_event_id,
+                        WikiPatchRow.operation == WikiOperation.CREATE_EVENT,
+                        WikiPatchRow.status.in_(("pending", "approved", "rerun_requested")),
+                    )
+                )
+            )
+            expected_identity = (
+                str(payload.event.event_family),
+                _normalized_identity(payload.event.event_subject),
+                _normalized_identity(payload.event.event_title),
+                payload.event.event_time,
+            )
+            for collision in collisions:
+                other = (collision.payload or {}).get("event") or {}
+                other_identity = (
+                    str(other.get("event_family", "")),
+                    _normalized_identity(str(other.get("event_subject", ""))),
+                    _normalized_identity(str(other.get("event_title", ""))),
+                    _utc(other.get("event_time")),
+                )
+                if other_identity != expected_identity:
+                    issues.append(
+                        AuditIssue(
+                            code="event_id_collision",
+                            message=f"Event ID conflicts with patch {collision.patch_id}",
+                            severity="block",
+                            field_ref="payload.event.event_id",
+                        )
+                    )
+                    break
 
         allowed = set(patch.evidence_ids)
         rows = list(

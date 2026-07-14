@@ -206,6 +206,102 @@ def test_blocked_patch_cannot_be_approved(repository: Repository) -> None:
         repository.review_patch("PATCH_1", decision="approve", reviewer="reviewer@example.test")
 
 
+def test_repair_pending_event_ids_updates_payload_edges_and_is_idempotent(
+    repository: Repository,
+) -> None:
+    repository.upsert_evidence(evidence())
+    original = patch().model_copy(
+        update={
+            "event_id": "event_collision",
+            "payload": {
+                **patch().payload,
+                "event": {
+                    **patch().payload["event"],
+                    "event_id": "event_collision",
+                    "evidence_ids": ["DOC_1"],
+                },
+                "proposals": [
+                    {
+                        "proposal_id": "PROP_1",
+                        "candidate_id": "CAND_1",
+                        "event_family": "product_partnership",
+                        "event_subject": "Example Corp",
+                        "event_title": "Example Corp partners with Sample Cloud",
+                        "event_time": NOW.isoformat(),
+                        "known_at": NOW.isoformat(),
+                        "primary_symbols": ["EXM"],
+                        "evidence_ids": ["DOC_1"],
+                        "reason": "Synthetic proposal.",
+                    }
+                ],
+                "edges": [
+                    {
+                        **patch().payload["edges"][0],
+                        "source_node_id": "event_collision",
+                    }
+                ],
+            },
+        }
+    )
+    repository.create_patch(original)
+
+    preview = repository.repair_pending_event_ids(apply=False)
+    assert preview["changed"] == 1
+    assert repository.get_patch("PATCH_1")["event_id"] == "event_collision"
+
+    applied = repository.repair_pending_event_ids(apply=True)
+    repaired = repository.get_patch("PATCH_1")
+    assert applied["changed"] == 1
+    assert repaired["patch_id"] == "PATCH_1"
+    assert repaired["event_id"] != "event_collision"
+    assert repaired["payload"]["event"]["event_id"] == repaired["event_id"]
+    assert repaired["payload"]["edges"][0]["source_node_id"] == repaired["event_id"]
+    assert repository.get_review_context("PATCH_1")["review_history"][0][
+        "decision"
+    ] == "repair_event_id"
+
+    repeated = repository.repair_pending_event_ids(apply=True)
+    assert repeated["changed"] == 0
+
+
+def test_noncanonical_event_id_is_blocked_during_review(repository: Repository) -> None:
+    repository.upsert_evidence(evidence())
+    invalid = patch().model_copy(
+        update={
+            "event_id": "event_model_supplied",
+            "payload": {
+                **patch().payload,
+                "event": {
+                    **patch().payload["event"],
+                    "event_id": "event_model_supplied",
+                    "evidence_ids": ["DOC_1"],
+                },
+                "proposals": [
+                    {
+                        "proposal_id": "PROP_1",
+                        "candidate_id": "CAND_1",
+                        "event_family": "product_partnership",
+                        "event_subject": "Example Corp",
+                        "event_title": "Example Corp partners with Sample Cloud",
+                        "event_time": NOW.isoformat(),
+                        "known_at": NOW.isoformat(),
+                        "primary_symbols": ["EXM"],
+                        "evidence_ids": ["DOC_1"],
+                        "reason": "Synthetic proposal.",
+                    }
+                ],
+            },
+        }
+    )
+    repository.create_patch(invalid)
+
+    with pytest.raises(ValueError, match="BLOCK"):
+        repository.review_patch("PATCH_1", "approve")
+
+    codes = {issue["code"] for issue in repository.get_patch("PATCH_1")["audit"]["issues"]}
+    assert "noncanonical_event_id" in codes
+
+
 def edited_payload(*, claim_overrides=None, edge_overrides=None) -> dict:
     claim = {
         "claim_id": "CLAIM_EDITED",
