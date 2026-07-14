@@ -748,6 +748,7 @@ class Repository:
                 raise ValueError(f"patch is not pending: {row.status}")
             if edited_payload is not None:
                 row.payload = _json(edited_payload)
+                row.audit = AuditResult(status=AuditStatus.PASS).model_dump(mode="json")
             if normalized == "approve":
                 if not self._operation_supported(row.operation):
                     validation_error = f"operation {row.operation} is not supported for commit"
@@ -1416,7 +1417,12 @@ class Repository:
                 setattr(event, key, _utc(data[key]))
 
     def _insert_claims(self, session: Session, event_id: str, claims: list[dict[str, Any]]) -> None:
+        seen: set[str] = set()
         for data in claims:
+            claim_id = str(data["claim_id"])
+            if claim_id in seen or session.get(ClaimRow, claim_id) is not None:
+                continue
+            seen.add(claim_id)
             missing = self._missing_evidence(session, data.get("evidence_ids", []))
             if missing:
                 raise ValueError(f"unknown claim evidence IDs: {sorted(missing)}")
@@ -1430,7 +1436,12 @@ class Repository:
     def _insert_relations(
         self, session: Session, event_id: str, relations: list[dict[str, Any]]
     ) -> None:
+        seen: set[str] = set()
         for data in relations:
+            relation_id = str(data["relation_id"])
+            if relation_id in seen or session.get(RelationRow, relation_id) is not None:
+                continue
+            seen.add(relation_id)
             missing = self._missing_evidence(session, data.get("evidence_ids", []))
             if missing:
                 raise ValueError(f"unknown relation evidence IDs: {sorted(missing)}")
@@ -1448,7 +1459,12 @@ class Repository:
         version: int,
         edges: list[dict[str, Any]],
     ) -> None:
+        seen: set[str] = set()
         for data in edges:
+            edge_id = str(data["edge_id"])
+            if edge_id in seen or session.get(EventEdgeRow, edge_id) is not None:
+                continue
+            seen.add(edge_id)
             missing = self._missing_evidence(session, data.get("evidence_ids", []))
             if missing:
                 raise ValueError(f"unknown edge evidence IDs: {sorted(missing)}")

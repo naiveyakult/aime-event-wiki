@@ -366,6 +366,34 @@ def test_edited_payload_cannot_reference_existing_evidence_outside_patch(
         repository.review_patch("PATCH_1", "approve", edited_payload=payload)
 
 
+def test_valid_edit_replaces_prior_block_audit(repository: Repository) -> None:
+    repository.upsert_evidence(evidence())
+    blocked = patch().model_copy(update={"audit": AuditResult(status=AuditStatus.BLOCK)})
+    repository.create_patch(blocked)
+
+    reviewed = repository.review_patch(
+        "PATCH_1", "approve", edited_payload=patch().payload, reviewer="editor"
+    )
+
+    assert reviewed["status"] == "approved"
+    assert reviewed["audit"]["status"] == "PASS"
+
+
+def test_duplicate_knowledge_ids_are_committed_idempotently(repository: Repository) -> None:
+    repository.upsert_evidence(evidence())
+    original = patch()
+    duplicate_edges = [original.payload["edges"][0], original.payload["edges"][0]]
+    repository.create_patch(
+        original.model_copy(update={"payload": {**original.payload, "edges": duplicate_edges}})
+    )
+    repository.review_patch("PATCH_1", "approve")
+
+    repository.commit_approved_patch("PATCH_1")
+
+    snapshot = repository.graph_snapshot(NOW)
+    assert [edge["edge_id"] for edge in snapshot["edges"]] == ["EDGE_PATCH_1"]
+
+
 def test_event_version_and_unsupported_operations_fail_closed(repository: Repository) -> None:
     repository.upsert_evidence(evidence())
     repository.create_patch(patch())
