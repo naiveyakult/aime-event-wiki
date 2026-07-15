@@ -376,18 +376,18 @@ class Repository:
             last_time = page[-1].published_at
             last_id = page[-1].evidence_id
 
-    def save_candidate(self, candidate: CandidateBundle, *, status: str = "pending") -> None:
+    def save_candidate(self, candidate: CandidateBundle, *, status: str | None = None) -> None:
         values = candidate.model_dump(mode="json")
-        values.update(
-            window_start=candidate.window_start, window_end=candidate.window_end, status=status
-        )
+        values.update(window_start=candidate.window_start, window_end=candidate.window_end)
         with self.session() as session:
             row = session.get(CandidateRow, candidate.candidate_id)
             if row is None:
-                session.add(CandidateRow(**values))
+                session.add(CandidateRow(**values, status=status or "pending"))
             else:
                 for key, value in values.items():
                     setattr(row, key, value)
+                if status is not None:
+                    row.status = status
 
     def get_candidate(self, candidate_id: str) -> CandidateBundle | None:
         with self.session() as session:
@@ -439,6 +439,11 @@ class Repository:
                     delete(CandidateRow).where(CandidateRow.candidate_id == candidate_id)
                 ).rowcount
             )
+
+    def delete_candidates(self, *, status: str) -> int:
+        statement = delete(CandidateRow).where(CandidateRow.status == status)
+        with self.session() as session:
+            return int(session.execute(statement).rowcount or 0)
 
     def find_existing_events(
         self,

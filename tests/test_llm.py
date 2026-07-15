@@ -1,14 +1,24 @@
 from types import SimpleNamespace
 
 import httpx
+import pytest
 from openai import BadRequestError
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from event_wiki.llm import OpenAICompatibleStructuredClient
 
 
 class Result(BaseModel):
     value: str
+
+
+class EmptyCompatibleBatch(BaseModel):
+    items: list[str] = Field(default_factory=list)
+
+
+class EmptyCompletions:
+    def create(self, **kwargs):
+        return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=""))])
 
 
 class FakeCompletions:
@@ -101,3 +111,38 @@ def test_structured_client_configures_bounded_transport_retries(monkeypatch) -> 
 
     assert captured["timeout"] == 120
     assert captured["max_retries"] == 5
+
+
+def test_structured_client_treats_empty_response_as_empty_compatible_batch() -> None:
+    fake_client = SimpleNamespace(chat=SimpleNamespace(completions=EmptyCompletions()))
+    client = OpenAICompatibleStructuredClient(
+        api_key="synthetic-key",
+        model="synthetic-model",
+        client=fake_client,
+    )
+
+    result = client.invoke(
+        task="build_relations",
+        prompt="Extract relations.",
+        output_model=EmptyCompatibleBatch,
+        context={"input": "synthetic"},
+    )
+
+    assert result == EmptyCompatibleBatch()
+
+
+def test_structured_client_rejects_empty_response_for_required_output() -> None:
+    fake_client = SimpleNamespace(chat=SimpleNamespace(completions=EmptyCompletions()))
+    client = OpenAICompatibleStructuredClient(
+        api_key="synthetic-key",
+        model="synthetic-model",
+        client=fake_client,
+    )
+
+    with pytest.raises(ValueError, match="empty structured response"):
+        client.invoke(
+            task="synthetic_task",
+            prompt="Return a required result.",
+            output_model=Result,
+            context={"input": "synthetic"},
+        )

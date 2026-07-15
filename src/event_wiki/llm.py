@@ -4,7 +4,7 @@ import json
 from typing import Any, Protocol, TypeVar
 
 from openai import BadRequestError, OpenAI
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 OutputT = TypeVar("OutputT", bound=BaseModel)
 
@@ -113,6 +113,9 @@ class OpenAICompatibleStructuredClient:
                     max_tokens=max_tokens,
                 )
         content = response.choices[0].message.content
-        if not content:
-            raise ValueError(f"{task} returned an empty structured response")
+        if not content or not content.strip():
+            try:
+                return output_model()
+            except ValidationError as exc:
+                raise ValueError(f"{task} returned an empty structured response") from exc
         return output_model.model_validate_json(content)

@@ -82,11 +82,19 @@ def ingest(
 
 
 @app.command()
-def candidates(limit: int | None = typer.Option(None)) -> None:
+def candidates(
+    limit: int | None = typer.Option(None),
+    rebuild_pending: bool = typer.Option(
+        False, "--rebuild-pending", help="删除未处理候选并按当前召回规则重建"
+    ),
+) -> None:
     """Build deterministic candidate bundles from ingested evidence."""
     from event_wiki.pipeline import generate_candidates
 
-    typer.echo(f"created {generate_candidates(_repository(), limit=limit)} candidates")
+    repository = _repository()
+    deleted = repository.delete_candidates(status="pending") if rebuild_pending else 0
+    created = generate_candidates(repository, limit=limit)
+    typer.echo(f"deleted {deleted} pending candidates; created {created} candidates")
 
 
 @app.command()

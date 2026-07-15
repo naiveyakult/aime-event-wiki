@@ -123,6 +123,26 @@ def test_candidate_crud_and_event_lookup(repository: Repository) -> None:
     assert repository.get_candidate("CAND_1") is None
 
 
+def test_candidate_regeneration_preserves_processed_status_and_replaces_pending(
+    repository: Repository,
+) -> None:
+    processed = CandidateBundle(
+        candidate_id="CAND_PROCESSED",
+        evidence_ids=["DOC_1"],
+        window_start=NOW,
+        window_end=NOW,
+    )
+    pending = processed.model_copy(update={"candidate_id": "CAND_PENDING"})
+    repository.save_candidate(processed, status="no_event")
+    repository.save_candidate(pending)
+
+    repository.save_candidate(processed)
+    deleted = repository.delete_candidates(status="pending")
+
+    assert deleted == 1
+    assert repository.list_candidates(status="no_event") == [processed]
+
+
 def test_patch_review_commit_and_optimistic_version(repository: Repository) -> None:
     repository.upsert_evidence(evidence())
     repository.create_patch(patch())
