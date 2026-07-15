@@ -11,12 +11,94 @@ from datetime import datetime, timedelta
 from event_wiki.models import CandidateBundle, EvidenceDocument
 
 TOKEN_RE = re.compile(r"[a-z0-9]+")
-STOP = {"a", "an", "the", "of", "for", "to", "in", "on", "and", "or", "says", "said"}
+STOP = {
+    "a",
+    "an",
+    "the",
+    "of",
+    "for",
+    "to",
+    "in",
+    "on",
+    "and",
+    "or",
+    "says",
+    "said",
+    "10",
+    "announced",
+    "announces",
+    "amend",
+    "analyst",
+    "annual",
+    "beat",
+    "beats",
+    "call",
+    "co",
+    "company",
+    "corp",
+    "corporation",
+    "conference",
+    "current",
+    "earnings",
+    "eps",
+    "estimate",
+    "estimates",
+    "financial",
+    "first",
+    "fiscal",
+    "foreign",
+    "forecast",
+    "forecasts",
+    "gaap",
+    "form",
+    "fourth",
+    "group",
+    "inc",
+    "issuer",
+    "limited",
+    "lowered",
+    "lowers",
+    "ltd",
+    "maintains",
+    "miss",
+    "misses",
+    "news",
+    "non",
+    "plc",
+    "present",
+    "presents",
+    "price",
+    "quarter",
+    "quarterly",
+    "raised",
+    "raises",
+    "rating",
+    "report",
+    "reports",
+    "results",
+    "revenue",
+    "rules",
+    "section",
+    "sections",
+    "stock",
+    "surpass",
+    "surpasses",
+    "target",
+    "second",
+    "third",
+    "transcript",
+    "update",
+}
 
 
 def title_tokens(title: str) -> set[str]:
     return {
-        token for token in TOKEN_RE.findall(title.lower()) if token not in STOP and len(token) > 1
+        token
+        for token in TOKEN_RE.findall(title.lower())
+        if token not in STOP
+        and len(token) > 1
+        and not token.isdigit()
+        and not re.fullmatch(r"20\d{2}|q[1-4]", token)
     }
 
 
@@ -46,6 +128,9 @@ class _Component:
     last_seen: datetime
     order: int
     member_ids: set[str]
+    anchor_tokens: set[str]
+    symbols: set[str]
+    entities: set[str]
     generation: int = 0
 
 
@@ -95,6 +180,8 @@ class _StreamingBuilder:
         left_component.pending.extend(right_component.pending)
         left_component.pending.sort(key=lambda doc: (doc.published_at, doc.evidence_id))
         left_component.member_ids.update(right_component.member_ids)
+        left_component.symbols.update(right_component.symbols)
+        left_component.entities.update(right_component.entities)
         left_component.last_seen = max(left_component.last_seen, right_component.last_seen)
         left_component.generation += 1
         del self.components[right_root]
@@ -207,7 +294,11 @@ class _StreamingBuilder:
                     current_symbols.intersection(previous.symbols)
                     or current_entities.intersection(previous.entity_names)
                 )
-                if current_symbols and previous.symbols and not shares_identity:
+                has_comparable_identity = bool(
+                    (current_symbols and previous.symbols)
+                    or (current_entities and previous.entity_names)
+                )
+                if has_comparable_identity and not shares_identity:
                     if scan_budget <= 0:
                         return selected
                     continue
@@ -237,6 +328,9 @@ class _StreamingBuilder:
             last_seen=document.published_at,
             order=self.next_order,
             member_ids={evidence_id},
+            anchor_tokens=tokens,
+            symbols=set(document.symbols),
+            entities=set(document.entity_names),
         )
         self.next_order += 1
         self.components[evidence_id] = component
@@ -245,7 +339,16 @@ class _StreamingBuilder:
         matches: list[str] = []
         for previous_id in self._candidate_ids(document, tokens):
             self.stats.title_comparisons += 1
-            if jaccard(tokens, self.tokens_by_id[previous_id]) >= self.title_threshold:
+            if jaccard(tokens, self.tokens_by_id[previous_id]) < self.title_threshold:
+                continue
+            component = self.components[self.find(previous_id)]
+            if set(document.symbols).intersection(component.symbols):
+                anchor_threshold = self.title_threshold
+            elif set(document.entity_names).intersection(component.entities):
+                anchor_threshold = max(self.title_threshold, 0.35)
+            else:
+                anchor_threshold = max(self.title_threshold, 0.5)
+            if jaccard(tokens, component.anchor_tokens) >= anchor_threshold:
                 matches.append(previous_id)
         root = evidence_id
         for previous_id in matches:

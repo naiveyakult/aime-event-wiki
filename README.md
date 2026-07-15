@@ -26,6 +26,14 @@ event-wiki link --all --limit 20
 event-wiki serve
 ```
 
+召回规则升级后，可以只删除并重建尚未处理的候选，同时保留已经完成、待审或失败候选的状态：
+
+```bash
+event-wiki candidates --rebuild-pending
+```
+
+候选召回会优先使用 symbol 与实体身份，并要求新文档同时匹配候选锚点，避免通用财报或公告标题通过传递相似度串联成跨公司的大候选组。
+
 在 `http://127.0.0.1:8000/reviews` 审核 Patch。已批准的版本可通过以下命令导出：
 
 ```bash
